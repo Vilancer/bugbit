@@ -74,6 +74,14 @@ inputs:
       auto-describe markers are already present. Requires pull-requests: write.
     required: false
     default: 'false'
+  describe-labels:
+    description: >
+      Optional comma-separated label names to apply to the PR after updating the
+      description. Requires issues: write permission on the consumer workflow.
+      Leave empty to skip extra configured labels; inferred type and review-effort
+      labels are still applied by the describe pass.
+    required: false
+    default: ''
 
 runs:
   using: 'node24'

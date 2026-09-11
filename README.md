@@ -106,6 +106,10 @@ jobs:
     # description with: type, summary bullets, mermaid diagram, file
     # walkthrough, and test plan. Needs pull-requests: write permission.
     # auto-describe: true
+
+    # Comma-separated labels to apply after the describe pass.
+    # Needs issues: write permission.
+    # describe-labels: "Review effort 4/5"
 ```
 
 | Input | Required | Default | Notes |
@@ -119,6 +123,7 @@ jobs:
 | `post-clean-summary` | no | `true` | Post a visible LGTM COMMENT review when `post_review` receives zero findings |
 | `clean-summary-body` | no | LGTM markdown | Body used for the clean-summary review |
 | `auto-describe` | no | `false` | Append a structured PR description once per PR (skipped if markers already present) |
+| `describe-labels` | no | `''` | Extra labels to apply after describe; needs `issues: write`. Describe pass also infers type + review-effort labels |
 
 # Scenarios
 
@@ -251,6 +256,15 @@ permissions:
 ```
 
 If `save-stream-log` is `false`, omit `actions: write` to keep the token scope minimal.
+
+**With auto-describe labels (`auto-describe: true` and inferred / `describe-labels`):**
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+```
 
 # Limitations
 

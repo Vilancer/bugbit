@@ -373,3 +373,50 @@ export async function updatePrDescription(deps, { title, body }) {
     preservedAuthorBody: Boolean(stripAutoDescribeSection(existingBody).trim()),
   };
 }
+
+/**
+ * Apply a list of labels to the PR (uses the issues API, requires issues: write).
+ * Creates missing labels so inferred type / review-effort names work on first use.
+ * @param {OpsDeps} deps
+ * @param {{ labels: string[] }} input
+ */
+export async function setPrLabels(deps, { labels }) {
+  if (!Array.isArray(labels) || labels.length === 0) {
+    return {
+      error: {
+        code: 'INVALID_ARGS',
+        message: 'labels must be a non-empty array',
+      },
+    };
+  }
+
+  const pr = requirePullRequest(deps.eventPath);
+  const octokit = createClient(deps.token);
+  const { owner, repo } = parseRepo(deps.repository);
+
+  for (const name of labels) {
+    try {
+      await octokit.rest.issues.getLabel({ owner, repo, name });
+    } catch (error) {
+      const status =
+        error && typeof error === 'object' && 'status' in error ? error.status : undefined;
+      if (status !== 404) {
+        throw error;
+      }
+      await octokit.rest.issues.createLabel({
+        owner,
+        repo,
+        name,
+        color: 'ededed',
+      });
+    }
+  }
+
+  await octokit.rest.issues.addLabels({
+    owner,
+    repo,
+    issue_number: pr.number,
+    labels,
+  });
+  return { applied: labels };
+}

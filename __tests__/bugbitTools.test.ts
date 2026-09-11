@@ -27,6 +27,9 @@ export async function postInlineComment(_deps, input) {
 export async function updatePrDescription(_deps, input) {
   return { updated: true, body: input.body };
 }
+export async function setPrLabels(_deps, input) {
+  return { applied: input.labels };
+}
 `;
 
 const REVIEW_TOOL_NAMES = [
@@ -40,6 +43,7 @@ const DESCRIBE_TOOL_NAMES = [
   'get_pr_context',
   'get_diff',
   'update_pr_description',
+  'set_pr_labels',
 ] as const;
 
 function setupActionPath(): string {

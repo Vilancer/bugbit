@@ -62,6 +62,17 @@ async function run(): Promise<void> {
       '## bugbit: LGTM — no findings\n\nNo issues reported on this diff.';
     const autoDescribe =
       (core.getInput('auto-describe') || 'false').toString().toLowerCase() === 'true';
+    const describeLabelsRaw = (core.getInput('describe-labels') || '').trim();
+    const describeLabels = describeLabelsRaw
+      .split(',')
+      .map((label) => label.trim())
+      .filter(Boolean);
+
+    if (autoDescribe && describeLabels.length > 0) {
+      core.warning(
+        'describe-labels configured — consumer job must include permissions: issues: write and pull-requests: write',
+      );
+    }
 
     const prNumber = core.getInput('pr-number');
     const rawEventPath = process.env.GITHUB_EVENT_PATH ?? '';
@@ -93,6 +104,7 @@ async function run(): Promise<void> {
       postCleanSummary,
       cleanSummaryBody,
       autoDescribe,
+      describeLabels,
     };
 
     if (saveStreamLog) {

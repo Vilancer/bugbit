@@ -29157,6 +29157,7 @@ __nccwpck_require__.d(__webpack_exports__, {
   Tl: () => (/* binding */ mergeAutoDescribeBody),
   Zb: () => (/* binding */ postInlineComment),
   Xc: () => (/* binding */ postReview),
+  CD: () => (/* binding */ setPrLabels),
   Gp: () => (/* binding */ stripAutoDescribeSection),
   Gg: () => (/* binding */ updatePrDescription)
 });
@@ -34198,6 +34199,53 @@ async function updatePrDescription(deps, { title, body }) {
   };
 }
 
+/**
+ * Apply a list of labels to the PR (uses the issues API, requires issues: write).
+ * Creates missing labels so inferred type / review-effort names work on first use.
+ * @param {OpsDeps} deps
+ * @param {{ labels: string[] }} input
+ */
+async function setPrLabels(deps, { labels }) {
+  if (!Array.isArray(labels) || labels.length === 0) {
+    return {
+      error: {
+        code: 'INVALID_ARGS',
+        message: 'labels must be a non-empty array',
+      },
+    };
+  }
+
+  const pr = requirePullRequest(deps.eventPath);
+  const octokit = createClient(deps.token);
+  const { owner, repo } = parseRepo(deps.repository);
+
+  for (const name of labels) {
+    try {
+      await octokit.rest.issues.getLabel({ owner, repo, name });
+    } catch (error) {
+      const status =
+        error && typeof error === 'object' && 'status' in error ? error.status : undefined;
+      if (status !== 404) {
+        throw error;
+      }
+      await octokit.rest.issues.createLabel({
+        owner,
+        repo,
+        name,
+        color: 'ededed',
+      });
+    }
+  }
+
+  await octokit.rest.issues.addLabels({
+    owner,
+    repo,
+    issue_number: pr.number,
+    labels,
+  });
+  return { applied: labels };
+}
+
 var __webpack_exports__AUTO_DESCRIBE_END = __webpack_exports__.Oi;
 var __webpack_exports__AUTO_DESCRIBE_START = __webpack_exports__.r$;
 var __webpack_exports__getDiff = __webpack_exports__.Gw;
@@ -34206,6 +34254,7 @@ var __webpack_exports__hasAutoDescribeSection = __webpack_exports__.cT;
 var __webpack_exports__mergeAutoDescribeBody = __webpack_exports__.Tl;
 var __webpack_exports__postInlineComment = __webpack_exports__.Zb;
 var __webpack_exports__postReview = __webpack_exports__.Xc;
+var __webpack_exports__setPrLabels = __webpack_exports__.CD;
 var __webpack_exports__stripAutoDescribeSection = __webpack_exports__.Gp;
 var __webpack_exports__updatePrDescription = __webpack_exports__.Gg;
-export { __webpack_exports__AUTO_DESCRIBE_END as AUTO_DESCRIBE_END, __webpack_exports__AUTO_DESCRIBE_START as AUTO_DESCRIBE_START, __webpack_exports__getDiff as getDiff, __webpack_exports__getPrContext as getPrContext, __webpack_exports__hasAutoDescribeSection as hasAutoDescribeSection, __webpack_exports__mergeAutoDescribeBody as mergeAutoDescribeBody, __webpack_exports__postInlineComment as postInlineComment, __webpack_exports__postReview as postReview, __webpack_exports__stripAutoDescribeSection as stripAutoDescribeSection, __webpack_exports__updatePrDescription as updatePrDescription };
+export { __webpack_exports__AUTO_DESCRIBE_END as AUTO_DESCRIBE_END, __webpack_exports__AUTO_DESCRIBE_START as AUTO_DESCRIBE_START, __webpack_exports__getDiff as getDiff, __webpack_exports__getPrContext as getPrContext, __webpack_exports__hasAutoDescribeSection as hasAutoDescribeSection, __webpack_exports__mergeAutoDescribeBody as mergeAutoDescribeBody, __webpack_exports__postInlineComment as postInlineComment, __webpack_exports__postReview as postReview, __webpack_exports__setPrLabels as setPrLabels, __webpack_exports__stripAutoDescribeSection as stripAutoDescribeSection, __webpack_exports__updatePrDescription as updatePrDescription };

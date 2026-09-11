@@ -803,6 +803,7 @@ function toOpsDeps(deps) {
         postCleanSummary: deps.postCleanSummary,
         cleanSummaryBody: deps.cleanSummaryBody,
         autoDescribe: deps.autoDescribe,
+        describeLabels: deps.describeLabels,
     };
 }
 async function checkReviewPermissions(deps) {
@@ -869,6 +870,28 @@ function createBugbitTools(deps, pass = 'review') {
             core.info('[bugbit] get_pr_context called');
             const ops = await loadOps(deps.actionPath);
             return (await ops.getPrContext(toolDeps));
+        },
+        set_pr_labels: {
+            description: 'Applies labels to the PR (issues API). Creates missing labels. Requires issues: write permission.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    labels: {
+                        type: 'array',
+                        items: { type: 'string' },
+                    },
+                },
+                required: ['labels'],
+                additionalProperties: false,
+            },
+            execute: async (args) => {
+                core.info(`[bugbit] set_pr_labels called with ${args.labels.length} label(s)`);
+                const ops = await loadOps(deps.actionPath);
+                const result = await ops.setPrLabels(toolDeps, {
+                    labels: args.labels,
+                });
+                return result;
+            },
         },
     };
     const get_diff = {
@@ -1047,6 +1070,14 @@ async function run() {
         const cleanSummaryBody = core.getInput('clean-summary-body') ||
             '## bugbit: LGTM — no findings\n\nNo issues reported on this diff.';
         const autoDescribe = (core.getInput('auto-describe') || 'false').toString().toLowerCase() === 'true';
+        const describeLabelsRaw = (core.getInput('describe-labels') || '').trim();
+        const describeLabels = describeLabelsRaw
+            .split(',')
+            .map((label) => label.trim())
+            .filter(Boolean);
+        if (autoDescribe && describeLabels.length > 0) {
+            core.warning('describe-labels configured — consumer job must include permissions: issues: write and pull-requests: write');
+        }
         const prNumber = core.getInput('pr-number');
         const rawEventPath = process.env.GITHUB_EVENT_PATH ?? '';
         const repository = process.env.GITHUB_REPOSITORY ?? '';
@@ -1071,6 +1102,7 @@ async function run() {
             postCleanSummary,
             cleanSummaryBody,
             autoDescribe,
+            describeLabels,
         };
         if (saveStreamLog) {
             core.info('save-stream-log enabled — consumer workflow must include actions: write');
@@ -1297,7 +1329,7 @@ function buildDescribePrefetchedSection(prefetched) {
         'Pass ONLY the auto-describe section to update_pr_description — never rewrite or include the author body; the tool appends after it.',
         'When diffMode is hunk_ranges or paths_only, use file paths and diff stats to build the File Walkthrough; read files only if needed.',
         'Do NOT call post_review in describe mode. Do NOT spawn subagents.',
-        'You MUST call update_pr_description before finishing.',
+        'You MUST call update_pr_description before finishing. Then call set_pr_labels with inferred type + review-effort labels.',
         JSON.stringify(prefetched, null, 2),
         '</prefetched_pr_data>',
     ];

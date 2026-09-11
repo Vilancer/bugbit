@@ -21,6 +21,7 @@ type OpsModule = {
     deps: OpsDeps,
     input: { title?: string; body: string },
   ) => Promise<unknown>;
+  setPrLabels: (deps: OpsDeps, input: { labels: string[] }) => Promise<unknown>;
 };
 
 const opsPromises = new Map<string, Promise<OpsModule>>();
@@ -82,6 +83,7 @@ function toOpsDeps(deps: BugbitToolDeps): OpsDeps {
     postCleanSummary: deps.postCleanSummary,
     cleanSummaryBody: deps.cleanSummaryBody,
     autoDescribe: deps.autoDescribe,
+    describeLabels: deps.describeLabels,
   };
 }
 
@@ -164,6 +166,29 @@ export function createBugbitTools(
       core.info('[bugbit] get_pr_context called');
       const ops = await loadOps(deps.actionPath);
       return (await ops.getPrContext(toolDeps)) as SDKJsonValue;
+    },
+    set_pr_labels: {
+      description:
+        'Applies labels to the PR (issues API). Creates missing labels. Requires issues: write permission.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          labels: {
+            type: 'array',
+            items: { type: 'string' },
+          },
+        },
+        required: ['labels'],
+        additionalProperties: false,
+      },
+      execute: async (args) => {
+        core.info(`[bugbit] set_pr_labels called with ${(args.labels as string[]).length} label(s)`);
+        const ops = await loadOps(deps.actionPath);
+        const result = await ops.setPrLabels(toolDeps, {
+          labels: args.labels as string[],
+        });
+        return result as SDKJsonValue;
+      },
     },
   };
 
