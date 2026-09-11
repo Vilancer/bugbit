@@ -18,9 +18,10 @@ inputs:
   review-modes:
     description: >
       Comma-separated list of review modes to run. Each mode maps to a
-      Cursor built-in skill (/code-review, /review-security, /simplify).
+      Cursor built-in skill (/review-bugbot, /review-security, /simplify).
       Output is read-only: findings posted as inline PR comments.
-      Any of: code-review, security-review, simplify
+      Any of: code-review (alias review-bugbot / bugbot), security-review
+      (alias review-security), simplify. code-review invokes /review-bugbot.
     required: false
     default: 'code-review'
   github-token:

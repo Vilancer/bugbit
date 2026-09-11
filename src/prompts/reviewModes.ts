@@ -6,29 +6,42 @@ export const ALLOWED_MODES = ['code-review', 'security-review', 'simplify'] as c
 export type ReviewMode = (typeof ALLOWED_MODES)[number];
 
 export const SKILL_BY_MODE: Record<ReviewMode, string> = {
-  'code-review': '/code-review',
+  'code-review': '/review-bugbot',
   'security-review': '/review-security',
   simplify: '/simplify',
 };
+
+const MODE_ALIASES: Record<string, ReviewMode> = {
+  'code-review': 'code-review',
+  'review-bugbot': 'code-review',
+  bugbot: 'code-review',
+  'security-review': 'security-review',
+  'review-security': 'security-review',
+  simplify: 'simplify',
+};
+
+const ALLOWED_MODE_LIST =
+  'code-review, security-review, simplify (aliases: review-bugbot, bugbot, review-security)';
 
 export function parseReviewModes(input: string): string[] {
   return input
     .split(',')
     .map((mode) => mode.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((mode) => MODE_ALIASES[mode] ?? mode);
 }
 
 export function validateReviewModes(modes: string[]): void {
   if (modes.length === 0) {
     throw new Error(
-      'review-modes must include at least one mode. Allowed: code-review, security-review, simplify',
+      `review-modes must include at least one mode. Allowed: ${ALLOWED_MODE_LIST}`,
     );
   }
 
   for (const mode of modes) {
     if (!(ALLOWED_MODES as readonly string[]).includes(mode)) {
       throw new Error(
-        `Unknown review mode: ${mode}. Allowed: code-review, security-review, simplify`,
+        `Unknown review mode: ${mode}. Allowed: ${ALLOWED_MODE_LIST}`,
       );
     }
   }

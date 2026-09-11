@@ -7,7 +7,7 @@ bugbit is a lightweight, self-hosted GitHub Action that reviews pull requests us
 ## How it works
 
 1. Validates `GITHUB_TOKEN` permissions and prefetches PR context and diff
-2. Invokes Cursor built-in review skills (`/code-review`, `/review-security`, `/simplify`) with a GitHub Actions overlay for read-only, line-anchored findings
+2. Invokes Cursor built-in review skills (`/review-bugbot`, `/review-security`, `/simplify`) with a GitHub Actions overlay for read-only, line-anchored findings
 3. Posts findings as **inline PR review comments** on the exact diff lines via custom tools (`post_review`)
 
 No walls of text at the bottom of the conversation — just line-anchored feedback from the agent you already trust.
@@ -81,6 +81,7 @@ jobs:
     model: composer-2.5
 
     # Comma-separated review modes: code-review, security-review, simplify
+    # (code-review invokes /review-bugbot; aliases: review-bugbot, bugbot, review-security)
     # Default: code-review
     review-modes: code-review
 
@@ -98,7 +99,7 @@ jobs:
 | `cursor-api-key` | yes | — | Repository secret with your Cursor API key |
 | `github-token` | yes | `${{ github.token }}` | Needs job `permissions` below |
 | `model` | no | `composer-2.5` | Cursor model id |
-| `review-modes` | no | `code-review` | Comma-separated: `code-review`, `security-review`, `simplify` |
+| `review-modes` | no | `code-review` | Comma-separated: `code-review` (`/review-bugbot`), `security-review`, `simplify`. Aliases: `review-bugbot`, `bugbot`, `review-security` |
 | `save-stream-log` | no | `false` | JSONL debug artifact; needs `actions: write` |
 | `pr-number` | no | — | Required for `workflow_dispatch` when the event has no `pull_request`; ignored otherwise |
 
@@ -205,8 +206,8 @@ Each `review-modes` value maps to a Cursor built-in skill:
 
 | Mode | Cursor skill | Purpose |
 |------|--------------|---------|
-| `code-review` | `/code-review` | General code review |
-| `security-review` | `/review-security` | Security-focused review |
+| `code-review` | `/review-bugbot` | General code review (aliases: `review-bugbot`, `bugbot`) |
+| `security-review` | `/review-security` | Security-focused review (alias: `review-security`) |
 | `simplify` | `/simplify` | Complexity and simplification suggestions |
 
 Pass multiple modes as a comma-separated list: `code-review, security-review, simplify`.

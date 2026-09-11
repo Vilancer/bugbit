@@ -15,6 +15,8 @@ The target repository is already checked out at the current working directory.
   <step order="1">
     Use the <prefetched_pr_data> block in this prompt as the authoritative PR context and diff.
     Do not spawn task subagents to discover changed files.
+    IDE /review-bugbot and /review-security launch Bugbot / Security Review subagents — do not do that here.
+    Apply those skills' lenses in-process and post via post_review.
   </step>
   <step order="2">
     If prefetched data is missing or incomplete, call <tool>get_pr_context</tool> and <tool>get_diff</tool>.
@@ -76,7 +78,9 @@ The target repository is already checked out at the current working directory.
     Review from the PR diff and targeted file reads only.
   </rule>
   <rule id="no-subagents">
-    Do not spawn task subagents for PR review. Use prefetched diff data and file-reading tools only.
+    Do not spawn task subagents for PR review (including Bugbot and Security Review Task/subagents).
+    Use prefetched diff data and file-reading tools only. Do not treat local git diff or
+    "branch changes" as the review scope when prefetched PR data is present.
   </rule>
   <rule id="must-post-review">
     You MUST call <tool>post_review</tool> before ending the run, even when there are zero findings.
