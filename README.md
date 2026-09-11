@@ -92,6 +92,15 @@ jobs:
     # Pull request number. Required for workflow_dispatch unless the event
     # already includes pull_request. Ignored on pull_request triggers.
     pr-number: ${{ github.event.pull_request.number }}
+
+    # When true (default), empty findings post a visible LGTM COMMENT review.
+    post-clean-summary: true
+
+    # Optional override for the clean-summary review body.
+    # clean-summary-body: |
+    #   ## bugbit: LGTM — no findings
+    #
+    #   No issues reported on this diff.
 ```
 
 | Input | Required | Default | Notes |
@@ -102,6 +111,8 @@ jobs:
 | `review-modes` | no | `code-review` | Comma-separated: `code-review` (`/review-bugbot`), `security-review`, `simplify`. Aliases: `review-bugbot`, `bugbot`, `review-security` |
 | `save-stream-log` | no | `false` | JSONL debug artifact; needs `actions: write` |
 | `pr-number` | no | — | Required for `workflow_dispatch` when the event has no `pull_request`; ignored otherwise |
+| `post-clean-summary` | no | `true` | Post a visible LGTM COMMENT review when `post_review` receives zero findings |
+| `clean-summary-body` | no | LGTM markdown | Body used for the clean-summary review |
 
 # Scenarios
 

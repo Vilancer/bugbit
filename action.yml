@@ -50,6 +50,22 @@ inputs:
       manual runs). In your consumer workflow, pass the dispatch input value
       to this field (for example map your workflow's pr_number input).
     required: false
+  post-clean-summary:
+    description: >
+      When true, posting an empty findings array via post_review creates a
+      visible COMMENT review (LGTM / no findings) instead of staying silent.
+      Default true.
+    required: false
+    default: 'true'
+  clean-summary-body:
+    description: >
+      Markdown body for the clean-summary review when post-clean-summary is
+      true and there are zero findings.
+    required: false
+    default: |
+      ## bugbit: LGTM — no findings
+
+      No issues reported on this diff.
 
 runs:
   using: 'node24'

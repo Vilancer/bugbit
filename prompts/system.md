@@ -58,7 +58,7 @@ The target repository is already checked out at the current working directory.
       body: concise comment text; you may prefix with the mode, e.g. [security-review] Missing auth check
     </inputs>
     <outputs>{ posted, errors, reviewId } — partial batch success returns per-index errors without failing valid posts</outputs>
-    <empty_result>If no issues are found, call with an empty findings array.</empty_result>
+    <empty_result>If no issues are found, call with an empty findings array. When post-clean-summary is enabled, that posts a visible LGTM COMMENT review.</empty_result>
   </tool>
   <tool name="post_inline_comment">
     <description>Posts a single inline comment on a specific file and line in the PR diff.</description>

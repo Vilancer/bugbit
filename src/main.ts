@@ -33,6 +33,12 @@ async function run(): Promise<void> {
     const model = core.getInput('model') || 'composer-2.5';
     const modesInput = core.getInput('review-modes') || 'code-review';
     const saveStreamLog = core.getBooleanInput('save-stream-log');
+    const postCleanSummaryInput = core.getInput('post-clean-summary');
+    const postCleanSummary =
+      postCleanSummaryInput === '' ? true : core.getBooleanInput('post-clean-summary');
+    const cleanSummaryBody =
+      core.getInput('clean-summary-body') ||
+      '## bugbit: LGTM — no findings\n\nNo issues reported on this diff.';
 
     const prNumber = core.getInput('pr-number');
     const rawEventPath = process.env.GITHUB_EVENT_PATH ?? '';
@@ -61,6 +67,8 @@ async function run(): Promise<void> {
       eventPath,
       repository,
       actionPath,
+      postCleanSummary,
+      cleanSummaryBody,
     };
 
     if (saveStreamLog) {

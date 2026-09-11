@@ -33895,13 +33895,37 @@ function validateFindingShape(finding, index) {
   };
 }
 
+const DEFAULT_CLEAN_SUMMARY_BODY =
+  '## bugbit: LGTM — no findings\n\nNo issues reported on this diff.';
+
 /**
  * @param {OpsDeps} deps
  * @param {unknown[]} findings
  */
 async function postReview(deps, findings) {
   if (!Array.isArray(findings) || findings.length === 0) {
-    return { posted: [], reviewId: null };
+    if (!deps.postCleanSummary) {
+      return { posted: [], reviewId: null, cleanSummary: false };
+    }
+
+    const pr = requirePullRequest(deps.eventPath);
+    const octokit = createClient(deps.token);
+    const { owner, repo } = parseRepo(deps.repository);
+    const body =
+      typeof deps.cleanSummaryBody === 'string' && deps.cleanSummaryBody.trim()
+        ? deps.cleanSummaryBody.trim()
+        : DEFAULT_CLEAN_SUMMARY_BODY;
+
+    const { data } = await octokit.rest.pulls.createReview({
+      owner,
+      repo,
+      pull_number: pr.number,
+      commit_id: pr.head.sha,
+      event: 'COMMENT',
+      body,
+    });
+
+    return { posted: [], reviewId: data.id, cleanSummary: true };
   }
 
   const pr = requirePullRequest(deps.eventPath);
@@ -33948,7 +33972,7 @@ async function postReview(deps, findings) {
     pull_number: pr.number,
     commit_id: pr.head.sha,
     event: 'COMMENT',
-    body: 'bugbit review findings',
+    body: `bugbit: ${validFindings.length} finding(s)`,
     comments: validFindings.map((f) => ({
       path: f.path,
       line: f.line,

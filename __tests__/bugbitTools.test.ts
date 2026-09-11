@@ -13,6 +13,9 @@ export async function getDiff() {
   return { files: [{ path: 'src/a.ts', status: 'modified' }] };
 }
 export async function postReview(_deps, findings) {
+  if (!findings.length) {
+    return { posted: [], reviewId: 7, cleanSummary: true };
+  }
   return { posted: findings, reviewId: null };
 }
 export async function postInlineComment(_deps, input) {
@@ -118,7 +121,7 @@ describe('createBugbitTools', () => {
     });
 
     const result = await tools.post_review.execute({ findings: [] }, {});
-    expect(result).toEqual({ posted: [], reviewId: null });
+    expect(result).toEqual({ posted: [], reviewId: 7, cleanSummary: true });
   });
 
   it('post_inline_comment.execute returns structured error for invalid path', async () => {

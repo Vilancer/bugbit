@@ -800,6 +800,8 @@ function toOpsDeps(deps) {
         token: deps.githubToken,
         eventPath: deps.eventPath,
         repository: deps.repository,
+        postCleanSummary: deps.postCleanSummary,
+        cleanSummaryBody: deps.cleanSummaryBody,
     };
 }
 async function checkReviewPermissions(deps) {
@@ -883,7 +885,7 @@ function createBugbitTools(deps) {
             },
         },
         post_review: {
-            description: 'Posts multiple inline comments as one PR review; prefer this over repeated post_inline_comment calls.',
+            description: 'Posts multiple inline comments as one PR review; prefer this over repeated post_inline_comment calls. Pass an empty findings array when there are no issues (may post an LGTM summary when configured).',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -1003,6 +1005,10 @@ async function run() {
         const model = core.getInput('model') || 'composer-2.5';
         const modesInput = core.getInput('review-modes') || 'code-review';
         const saveStreamLog = core.getBooleanInput('save-stream-log');
+        const postCleanSummaryInput = core.getInput('post-clean-summary');
+        const postCleanSummary = postCleanSummaryInput === '' ? true : core.getBooleanInput('post-clean-summary');
+        const cleanSummaryBody = core.getInput('clean-summary-body') ||
+            '## bugbit: LGTM — no findings\n\nNo issues reported on this diff.';
         const prNumber = core.getInput('pr-number');
         const rawEventPath = process.env.GITHUB_EVENT_PATH ?? '';
         const repository = process.env.GITHUB_REPOSITORY ?? '';
@@ -1024,6 +1030,8 @@ async function run() {
             eventPath,
             repository,
             actionPath,
+            postCleanSummary,
+            cleanSummaryBody,
         };
         if (saveStreamLog) {
             core.info('save-stream-log enabled — consumer workflow must include actions: write');

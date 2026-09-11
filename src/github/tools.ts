@@ -75,6 +75,8 @@ function toOpsDeps(deps: BugbitToolDeps): OpsDeps {
     token: deps.githubToken,
     eventPath: deps.eventPath,
     repository: deps.repository,
+    postCleanSummary: deps.postCleanSummary,
+    cleanSummaryBody: deps.cleanSummaryBody,
   };
 }
 
@@ -171,7 +173,7 @@ export function createBugbitTools(deps: BugbitToolDeps): Record<string, SDKCusto
     },
     post_review: {
       description:
-        'Posts multiple inline comments as one PR review; prefer this over repeated post_inline_comment calls.',
+        'Posts multiple inline comments as one PR review; prefer this over repeated post_inline_comment calls. Pass an empty findings array when there are no issues (may post an LGTM summary when configured).',
       inputSchema: {
         type: 'object',
         properties: {
