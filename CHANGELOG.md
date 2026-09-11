@@ -12,6 +12,11 @@ All notable changes to this project will be documented in this file.
 
 - Paginate `pulls.listFiles` (100 files per page) when prefetching the PR diff and building the comment line map. GitHub returns 30 files per page by default; PRs with more than 30 changed files were silently truncated.
 
+### Added
+
+- Prefetched PR context now includes `title` and `body`.
+- Progressive diff slim when serialized patch JSON exceeds 1MB: `diffMode` is `full`, then `hunk_ranges`, then `paths_only`. Large PRs always get a file inventory instead of `DIFF_TOO_LARGE`.
+
 ## [1.1.1] - 2026-07-06
 
 ### Fixed

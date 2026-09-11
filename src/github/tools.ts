@@ -78,14 +78,6 @@ function toOpsDeps(deps: BugbitToolDeps): OpsDeps {
   };
 }
 
-function isDiffTooLarge(error: unknown): error is Error & { code: string } {
-  return (
-    error instanceof Error &&
-    'code' in error &&
-    (error as Error & { code?: string }).code === 'DIFF_TOO_LARGE'
-  );
-}
-
 export async function checkReviewPermissions(deps: BugbitToolDeps): Promise<void> {
   try {
     await assertPullRequestContext(deps);
@@ -129,24 +121,12 @@ export async function prefetchPrData(deps: BugbitToolDeps): Promise<PrefetchedPr
 
   core.info('Prefetching PR context and diff…');
   const context = await ops.getPrContext(toolDeps);
-
-  try {
-    const diff = await ops.getDiff(toolDeps);
-    const fileCount = Array.isArray((diff as { files?: unknown[] })?.files)
-      ? (diff as { files: unknown[] }).files.length
-      : 0;
-    core.info(`Prefetched diff: ${fileCount} changed file(s)`);
-    return { context, diff };
-  } catch (error) {
-    if (isDiffTooLarge(error)) {
-      core.warning(`Diff too large to prefetch: ${error.message}; agent must call get_diff`);
-      return {
-        context,
-        diffError: { code: error.code, message: error.message },
-      };
-    }
-    throw error;
-  }
+  const diff = await ops.getDiff(toolDeps);
+  const typedDiff = diff as { files?: unknown[]; diffMode?: string };
+  const fileCount = Array.isArray(typedDiff.files) ? typedDiff.files.length : 0;
+  const diffMode = typeof typedDiff.diffMode === 'string' ? typedDiff.diffMode : 'full';
+  core.info(`Prefetched diff: ${fileCount} changed file(s) (diffMode=${diffMode})`);
+  return { context, diff };
 }
 
 export function isForkPullRequest(eventPath: string): boolean {
@@ -163,7 +143,7 @@ export function createBugbitTools(deps: BugbitToolDeps): Record<string, SDKCusto
   return {
     get_pr_context: {
       description:
-        'Returns PR number, head/base branch names, and commit SHAs for the current pull_request event.',
+        'Returns PR number, title, body, head/base branch names, and commit SHAs for the current pull_request event.',
       inputSchema: {
         type: 'object',
         properties: {},
@@ -177,7 +157,7 @@ export function createBugbitTools(deps: BugbitToolDeps): Record<string, SDKCusto
     },
     get_diff: {
       description:
-        'Returns changed files and parsed diff hunks for the current PR; use as the review scope.',
+        'Returns changed files for the current PR with diffMode (full | hunk_ranges | paths_only). Prefer prefetched data; use when missing.',
       inputSchema: {
         type: 'object',
         properties: {},
@@ -185,15 +165,8 @@ export function createBugbitTools(deps: BugbitToolDeps): Record<string, SDKCusto
       },
       execute: async () => {
         core.info('[bugbit] get_diff called');
-        try {
-          const ops = await loadOps(deps.actionPath);
-          return (await ops.getDiff(toolDeps)) as SDKJsonValue;
-        } catch (error) {
-          if (isDiffTooLarge(error)) {
-            return { error: { code: error.code, message: error.message } } as SDKJsonValue;
-          }
-          throw error;
-        }
+        const ops = await loadOps(deps.actionPath);
+        return (await ops.getDiff(toolDeps)) as SDKJsonValue;
       },
     },
     post_review: {

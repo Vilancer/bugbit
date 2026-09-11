@@ -802,11 +802,6 @@ function toOpsDeps(deps) {
         repository: deps.repository,
     };
 }
-function isDiffTooLarge(error) {
-    return (error instanceof Error &&
-        'code' in error &&
-        error.code === 'DIFF_TOO_LARGE');
-}
 async function checkReviewPermissions(deps) {
     try {
         await assertPullRequestContext(deps);
@@ -842,24 +837,12 @@ async function prefetchPrData(deps) {
     const toolDeps = toOpsDeps(deps);
     core.info('Prefetching PR context and diff…');
     const context = await ops.getPrContext(toolDeps);
-    try {
-        const diff = await ops.getDiff(toolDeps);
-        const fileCount = Array.isArray(diff?.files)
-            ? diff.files.length
-            : 0;
-        core.info(`Prefetched diff: ${fileCount} changed file(s)`);
-        return { context, diff };
-    }
-    catch (error) {
-        if (isDiffTooLarge(error)) {
-            core.warning(`Diff too large to prefetch: ${error.message}; agent must call get_diff`);
-            return {
-                context,
-                diffError: { code: error.code, message: error.message },
-            };
-        }
-        throw error;
-    }
+    const diff = await ops.getDiff(toolDeps);
+    const typedDiff = diff;
+    const fileCount = Array.isArray(typedDiff.files) ? typedDiff.files.length : 0;
+    const diffMode = typeof typedDiff.diffMode === 'string' ? typedDiff.diffMode : 'full';
+    core.info(`Prefetched diff: ${fileCount} changed file(s) (diffMode=${diffMode})`);
+    return { context, diff };
 }
 function isForkPullRequest(eventPath) {
     if (!eventPath)
@@ -874,7 +857,7 @@ function createBugbitTools(deps) {
     const toolDeps = toOpsDeps(deps);
     return {
         get_pr_context: {
-            description: 'Returns PR number, head/base branch names, and commit SHAs for the current pull_request event.',
+            description: 'Returns PR number, title, body, head/base branch names, and commit SHAs for the current pull_request event.',
             inputSchema: {
                 type: 'object',
                 properties: {},
@@ -887,7 +870,7 @@ function createBugbitTools(deps) {
             },
         },
         get_diff: {
-            description: 'Returns changed files and parsed diff hunks for the current PR; use as the review scope.',
+            description: 'Returns changed files for the current PR with diffMode (full | hunk_ranges | paths_only). Prefer prefetched data; use when missing.',
             inputSchema: {
                 type: 'object',
                 properties: {},
@@ -895,16 +878,8 @@ function createBugbitTools(deps) {
             },
             execute: async () => {
                 core.info('[bugbit] get_diff called');
-                try {
-                    const ops = await loadOps(deps.actionPath);
-                    return (await ops.getDiff(toolDeps));
-                }
-                catch (error) {
-                    if (isDiffTooLarge(error)) {
-                        return { error: { code: error.code, message: error.message } };
-                    }
-                    throw error;
-                }
+                const ops = await loadOps(deps.actionPath);
+                return (await ops.getDiff(toolDeps));
             },
         },
         post_review: {
@@ -1195,8 +1170,11 @@ function buildPrefetchedSection(prefetched) {
     const lines = [
         '<prefetched_pr_data>',
         'PR context and diff are preloaded below. Treat this as the authoritative review scope.',
+        'Use title and body as author intent; prefer high-impact findings over micro-nits.',
+        'When diffMode is hunk_ranges or paths_only, read files for targeted context; still scope comments to changed paths/lines.',
         'Do not spawn task subagents to discover changed files.',
         'You MUST call post_review before finishing (use an empty findings array if no issues).',
+        'On large diffs, cover multiple risk areas in one batch.',
         JSON.stringify(prefetched, null, 2),
         '</prefetched_pr_data>',
     ];

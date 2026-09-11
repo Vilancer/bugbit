@@ -75,8 +75,11 @@ function buildPrefetchedSection(prefetched?: PrefetchedPrData): string {
   const lines = [
     '<prefetched_pr_data>',
     'PR context and diff are preloaded below. Treat this as the authoritative review scope.',
+    'Use title and body as author intent; prefer high-impact findings over micro-nits.',
+    'When diffMode is hunk_ranges or paths_only, read files for targeted context; still scope comments to changed paths/lines.',
     'Do not spawn task subagents to discover changed files.',
     'You MUST call post_review before finishing (use an empty findings array if no issues).',
+    'On large diffs, cover multiple risk areas in one batch.',
     JSON.stringify(prefetched, null, 2),
     '</prefetched_pr_data>',
   ];

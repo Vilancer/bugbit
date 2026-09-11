@@ -243,6 +243,14 @@ bugbit paginates GitHub's `pulls.listFiles` API (100 files per page) for both th
 
 GitHub itself still caps that endpoint at **3,000 files** per pull request. Beyond that, the API truncates and bugbit can only review the returned set.
 
+### Large diffs
+
+Prefetched / `get_diff` payloads are capped at ~1MB of JSON. When the full parsed hunk body would exceed that, bugbit progressively slims the payload (`diffMode`: `full` → `hunk_ranges` → `paths_only`) so the agent still receives every changed path. For slim modes, the agent reads files for targeted context and still anchors comments via the full line map.
+
+### PR title and body
+
+`get_pr_context` (and prefetch) includes the PR `title` and `body`. A clear summary and test plan in the PR description helps the agent stay on the stated objective.
+
 ### Fork pull requests
 
 bugbit cannot post review comments on pull requests from forks. `GITHUB_TOKEN` is read-only for fork PR heads, so the action fails fast with a clear error. Use same-repository branches or a dedicated token/workflow pattern if you need fork coverage.

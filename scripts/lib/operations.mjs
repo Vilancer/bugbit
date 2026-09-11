@@ -1,7 +1,7 @@
 import { requirePullRequest } from './event.mjs';
 import { listPullRequestFiles } from './list-pr-files.mjs';
 import { createClient, parseRepo } from './octokit.mjs';
-import { mapPullRequestFiles, DIFF_SIZE_LIMIT } from './parse-patch.mjs';
+import { mapPullRequestFiles, buildSizedDiff } from './parse-patch.mjs';
 import { fetchDiffLineMap, validateFinding } from './validate.mjs';
 
 /**
@@ -19,6 +19,8 @@ export async function getPrContext(deps) {
     baseRef: pr.base.ref,
     headSha: pr.head.sha,
     baseSha: pr.base.sha,
+    title: typeof pr.title === 'string' ? pr.title : '',
+    body: typeof pr.body === 'string' ? pr.body : '',
   };
 }
 
@@ -33,16 +35,7 @@ export async function getDiff(deps) {
   const fileList = await listPullRequestFiles(octokit, owner, repo, pr.number);
 
   const files = mapPullRequestFiles(fileList);
-
-  const output = { files };
-
-  if (JSON.stringify(output).length > DIFF_SIZE_LIMIT) {
-    const err = new Error(`Diff JSON exceeds ${DIFF_SIZE_LIMIT} bytes`);
-    err.code = 'DIFF_TOO_LARGE';
-    throw err;
-  }
-
-  return output;
+  return buildSizedDiff(files);
 }
 
 /**
