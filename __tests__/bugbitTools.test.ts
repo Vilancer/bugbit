@@ -24,6 +24,9 @@ export async function postInlineComment(_deps, input) {
   }
   return { posted: true, path: input.path, line: input.line };
 }
+export async function updatePrDescription(_deps, input) {
+  return { updated: true, body: input.body };
+}
 `;
 
 const TOOL_NAMES = [
@@ -31,6 +34,7 @@ const TOOL_NAMES = [
   'get_diff',
   'post_review',
   'post_inline_comment',
+  'update_pr_description',
 ] as const;
 
 function setupActionPath(): string {
@@ -58,7 +62,7 @@ describe('createBugbitTools', () => {
     fs.rmSync(actionPath, { recursive: true, force: true });
   });
 
-  it('returns four custom tools with schema and execute handlers', () => {
+  it('returns custom tools with schema and execute handlers', () => {
     const tools = createBugbitTools({
       githubToken: 'test-token',
       eventPath: '/tmp/event.json',

@@ -7,6 +7,8 @@ export interface BugbitToolDeps {
   postCleanSummary?: boolean;
   /** Review body used when posting a clean-summary LGTM. */
   cleanSummaryBody?: string;
+  /** When true, runs an additional describe pass on the PR. */
+  autoDescribe?: boolean;
 }
 
 export interface PrefetchedPrData {
@@ -21,4 +23,5 @@ export interface OpsDeps {
   repository: string;
   postCleanSummary?: boolean;
   cleanSummaryBody?: string;
+  autoDescribe?: boolean;
 }

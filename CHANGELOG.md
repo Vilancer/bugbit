@@ -17,6 +17,7 @@ All notable changes to this project will be documented in this file.
 - Prefetched PR context now includes `title` and `body`.
 - Progressive diff slim when serialized patch JSON exceeds 1MB: `diffMode` is `full`, then `hunk_ranges`, then `paths_only`. Large PRs always get a file inventory instead of `DIFF_TOO_LARGE`.
 - `post-clean-summary` input (default `true`): empty `post_review` findings post a visible LGTM COMMENT review instead of staying silent. `clean-summary-body` customizes that review.
+- `auto-describe` input (default `false`): optional second agent pass that appends a structured PR description after the author body (once per PR; skipped when markers already exist). Ported from [JuicyBurger/bugbit](https://github.com/JuicyBurger/bugbit).
 
 ## [1.1.1] - 2026-07-06
 

@@ -13,14 +13,35 @@ import { fetchDiffLineMap, validateFinding } from './validate.mjs';
  */
 export async function getPrContext(deps) {
   const pr = requirePullRequest(deps.eventPath);
+  let title = typeof pr.title === 'string' ? pr.title : '';
+  let body = typeof pr.body === 'string' ? pr.body : '';
+
+  try {
+    const octokit = createClient(deps.token);
+    const { owner, repo } = parseRepo(deps.repository);
+    const { data: livePr } = await octokit.rest.pulls.get({
+      owner,
+      repo,
+      pull_number: pr.number,
+    });
+    if (typeof livePr.title === 'string') {
+      title = livePr.title;
+    }
+    if (typeof livePr.body === 'string') {
+      body = livePr.body;
+    }
+  } catch {
+    // Fall back to event payload.
+  }
+
   return {
     number: pr.number,
     headRef: pr.head.ref,
     baseRef: pr.base.ref,
     headSha: pr.head.sha,
     baseSha: pr.base.sha,
-    title: typeof pr.title === 'string' ? pr.title : '',
-    body: typeof pr.body === 'string' ? pr.body : '',
+    title,
+    body,
   };
 }
 
@@ -212,5 +233,134 @@ export async function postInlineComment(deps, { path, line, body }) {
   return {
     posted: [{ path, line, commentId: data.id }],
     reviewId: null,
+  };
+}
+
+/** Markers that wrap the auto-describe section so re-runs replace it without touching author text. */
+export const AUTO_DESCRIBE_START = '<!-- bugbit-auto-describe:start -->';
+export const AUTO_DESCRIBE_END = '<!-- bugbit-auto-describe:end -->';
+
+/**
+ * True when the PR body already contains a bugbit auto-describe block.
+ * @param {string} text
+ * @returns {boolean}
+ */
+export function hasAutoDescribeSection(text) {
+  if (!text || typeof text !== 'string') {
+    return false;
+  }
+  return text.includes(AUTO_DESCRIBE_START) && text.includes(AUTO_DESCRIBE_END);
+}
+
+/**
+ * Remove any previously written auto-describe block from a PR body.
+ * @param {string} text
+ * @returns {string}
+ */
+export function stripAutoDescribeSection(text) {
+  if (!text || typeof text !== 'string') {
+    return '';
+  }
+  const pattern = new RegExp(
+    `${escapeRegExp(AUTO_DESCRIBE_START)}[\\s\\S]*?${escapeRegExp(AUTO_DESCRIBE_END)}\\s*`,
+    'g',
+  );
+  return text.replace(pattern, '').trimEnd();
+}
+
+/**
+ * Merge developer-authored PR body with a newly generated auto-describe section.
+ * Author text is preserved; prior auto-describe blocks are replaced.
+ * @param {string} existingBody
+ * @param {string} generatedBody
+ * @returns {string}
+ */
+export function mergeAutoDescribeBody(existingBody, generatedBody) {
+  const authorPart = stripAutoDescribeSection(existingBody || '').trim();
+  const generated = stripAutoDescribeSection(generatedBody || '').trim();
+  if (!generated) {
+    return authorPart;
+  }
+  const block = `${AUTO_DESCRIBE_START}\n${generated}\n${AUTO_DESCRIBE_END}`;
+  if (!authorPart) {
+    return block;
+  }
+  return `${authorPart}\n\n${block}`;
+}
+
+/**
+ * @param {string} value
+ * @returns {string}
+ */
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Update the PR title and/or body.
+ * Body is merged: the developer's existing text is kept, and the generated
+ * auto-describe section is appended (or replaced on re-run).
+ * @param {OpsDeps} deps
+ * @param {{ title?: string, body: string }} input
+ */
+export async function updatePrDescription(deps, { title, body }) {
+  if (!body || typeof body !== 'string' || body.trim().length === 0) {
+    return {
+      error: {
+        code: 'INVALID_ARGS',
+        message: 'Missing required body',
+      },
+    };
+  }
+
+  const pr = requirePullRequest(deps.eventPath);
+  const octokit = createClient(deps.token);
+  const { owner, repo } = parseRepo(deps.repository);
+
+  let existingBody = typeof pr.body === 'string' ? pr.body : '';
+  try {
+    const { data: livePr } = await octokit.rest.pulls.get({
+      owner,
+      repo,
+      pull_number: pr.number,
+    });
+    if (typeof livePr.body === 'string') {
+      existingBody = livePr.body;
+    }
+  } catch {
+    // Fall back to event payload body.
+  }
+
+  if (hasAutoDescribeSection(existingBody)) {
+    const params = {
+      owner,
+      repo,
+      pull_number: pr.number,
+    };
+    if (title && typeof title === 'string' && title.trim().length > 0) {
+      params.title = title;
+      const { data } = await octokit.rest.pulls.update(params);
+      return { updated: true, id: data.id, skippedDescribe: true, preservedAuthorBody: true };
+    }
+    return { updated: false, skippedDescribe: true, preservedAuthorBody: true };
+  }
+
+  const mergedBody = mergeAutoDescribeBody(existingBody, body);
+
+  const params = {
+    owner,
+    repo,
+    pull_number: pr.number,
+    body: mergedBody,
+  };
+  if (title && typeof title === 'string' && title.trim().length > 0) {
+    params.title = title;
+  }
+
+  const { data } = await octokit.rest.pulls.update(params);
+  return {
+    updated: true,
+    id: data.id,
+    preservedAuthorBody: Boolean(stripAutoDescribeSection(existingBody).trim()),
   };
 }

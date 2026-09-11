@@ -17,6 +17,10 @@ type OpsModule = {
     deps: OpsDeps,
     input: { path: string; line: number; body: string },
   ) => Promise<unknown>;
+  updatePrDescription: (
+    deps: OpsDeps,
+    input: { title?: string; body: string },
+  ) => Promise<unknown>;
 };
 
 const opsPromises = new Map<string, Promise<OpsModule>>();
@@ -77,6 +81,7 @@ function toOpsDeps(deps: BugbitToolDeps): OpsDeps {
     repository: deps.repository,
     postCleanSummary: deps.postCleanSummary,
     cleanSummaryBody: deps.cleanSummaryBody,
+    autoDescribe: deps.autoDescribe,
   };
 }
 
@@ -224,6 +229,28 @@ export function createBugbitTools(deps: BugbitToolDeps): Record<string, SDKCusto
           path: args.path as string,
           line: args.line as number,
           body: args.body as string,
+        });
+        return result as SDKJsonValue;
+      },
+    },
+    update_pr_description: {
+      description:
+        'Appends an auto-describe section after the developer PR body (replaces prior auto-describe on re-run). Optionally updates title. Requires pull-requests: write.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          body: { type: 'string' },
+        },
+        required: ['body'],
+        additionalProperties: false,
+      },
+      execute: async (args) => {
+        core.info('[bugbit] update_pr_description called');
+        const ops = await loadOps(deps.actionPath);
+        const result = await ops.updatePrDescription(toolDeps, {
+          body: args.body as string,
+          ...(args.title ? { title: args.title as string } : {}),
         });
         return result as SDKJsonValue;
       },

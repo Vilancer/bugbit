@@ -66,6 +66,14 @@ inputs:
       ## bugbit: LGTM — no findings
 
       No issues reported on this diff.
+  auto-describe:
+    description: >
+      When true, runs an additional agent pass that appends a structured PR
+      description (type, bullets, mermaid, file walkthrough, test plan) after
+      the developer's existing body. Runs once per PR — skipped when the
+      auto-describe markers are already present. Requires pull-requests: write.
+    required: false
+    default: 'false'
 
 runs:
   using: 'node24'
