@@ -34206,6 +34206,15 @@ async function updatePrDescription(deps, { title, body }) {
  * @param {{ labels: string[] }} input
  */
 async function setPrLabels(deps, { labels }) {
+  if (!deps.autoDescribe) {
+    return {
+      error: {
+        code: 'DESCRIBE_DISABLED',
+        message: 'set_pr_labels is only available during the auto-describe pass',
+      },
+    };
+  }
+
   if (!Array.isArray(labels) || labels.length === 0) {
     return {
       error: {

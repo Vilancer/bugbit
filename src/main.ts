@@ -200,6 +200,7 @@ async function run(): Promise<void> {
         promptsDir,
         actionPath,
         prefetched,
+        describeLabels,
       );
       const describeRun = await runPass(
         'describe',

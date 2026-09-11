@@ -167,28 +167,29 @@ export function createBugbitTools(
       const ops = await loadOps(deps.actionPath);
       return (await ops.getPrContext(toolDeps)) as SDKJsonValue;
     },
-    set_pr_labels: {
-      description:
-        'Applies labels to the PR (issues API). Creates missing labels. Requires issues: write permission.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          labels: {
-            type: 'array',
-            items: { type: 'string' },
-          },
+  };
+
+  const set_pr_labels: SDKCustomTool = {
+    description:
+      'Applies labels to the PR (issues API). Creates missing labels. Requires issues: write permission.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        labels: {
+          type: 'array',
+          items: { type: 'string' },
         },
-        required: ['labels'],
-        additionalProperties: false,
       },
-      execute: async (args) => {
-        core.info(`[bugbit] set_pr_labels called with ${(args.labels as string[]).length} label(s)`);
-        const ops = await loadOps(deps.actionPath);
-        const result = await ops.setPrLabels(toolDeps, {
-          labels: args.labels as string[],
-        });
-        return result as SDKJsonValue;
-      },
+      required: ['labels'],
+      additionalProperties: false,
+    },
+    execute: async (args) => {
+      core.info(`[bugbit] set_pr_labels called with ${(args.labels as string[]).length} label(s)`);
+      const ops = await loadOps(deps.actionPath);
+      const result = await ops.setPrLabels(toolDeps, {
+        labels: args.labels as string[],
+      });
+      return result as SDKJsonValue;
     },
   };
 
@@ -290,7 +291,7 @@ export function createBugbitTools(
   };
 
   if (pass === 'describe') {
-    return { get_pr_context, get_diff, update_pr_description };
+    return { get_pr_context, get_diff, update_pr_description, set_pr_labels };
   }
 
   return { get_pr_context, get_diff, post_review, post_inline_comment };

@@ -146,9 +146,14 @@ export function buildDescribePrompt(
   promptsDir: string,
   actionPath: string,
   prefetched?: PrefetchedPrData,
+  labels?: string[],
 ): DescribePromptResult {
   const describeTemplate = loadDescribePrompt(promptsDir, actionPath);
+  const configured =
+    labels && labels.length > 0
+      ? `\n\n<configured_labels>\nAlso apply these labels (in addition to inferred type and review-effort): ${labels.join(', ')}\n</configured_labels>`
+      : '';
   return {
-    prompt: `${describeTemplate}${buildDescribePrefetchedSection(prefetched)}`,
+    prompt: `${describeTemplate}${buildDescribePrefetchedSection(prefetched)}${configured}`,
   };
 }

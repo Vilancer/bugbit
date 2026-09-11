@@ -871,27 +871,27 @@ function createBugbitTools(deps, pass = 'review') {
             const ops = await loadOps(deps.actionPath);
             return (await ops.getPrContext(toolDeps));
         },
-        set_pr_labels: {
-            description: 'Applies labels to the PR (issues API). Creates missing labels. Requires issues: write permission.',
-            inputSchema: {
-                type: 'object',
-                properties: {
-                    labels: {
-                        type: 'array',
-                        items: { type: 'string' },
-                    },
+    };
+    const set_pr_labels = {
+        description: 'Applies labels to the PR (issues API). Creates missing labels. Requires issues: write permission.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                labels: {
+                    type: 'array',
+                    items: { type: 'string' },
                 },
-                required: ['labels'],
-                additionalProperties: false,
             },
-            execute: async (args) => {
-                core.info(`[bugbit] set_pr_labels called with ${args.labels.length} label(s)`);
-                const ops = await loadOps(deps.actionPath);
-                const result = await ops.setPrLabels(toolDeps, {
-                    labels: args.labels,
-                });
-                return result;
-            },
+            required: ['labels'],
+            additionalProperties: false,
+        },
+        execute: async (args) => {
+            core.info(`[bugbit] set_pr_labels called with ${args.labels.length} label(s)`);
+            const ops = await loadOps(deps.actionPath);
+            const result = await ops.setPrLabels(toolDeps, {
+                labels: args.labels,
+            });
+            return result;
         },
     };
     const get_diff = {
@@ -984,7 +984,7 @@ function createBugbitTools(deps, pass = 'review') {
         },
     };
     if (pass === 'describe') {
-        return { get_pr_context, get_diff, update_pr_description };
+        return { get_pr_context, get_diff, update_pr_description, set_pr_labels };
     }
     return { get_pr_context, get_diff, post_review, post_inline_comment };
 }
@@ -1169,7 +1169,7 @@ async function run() {
             }
         }
         if (runDescribe) {
-            const { prompt: describePrompt } = (0, reviewModes_1.buildDescribePrompt)(promptsDir, actionPath, prefetched);
+            const { prompt: describePrompt } = (0, reviewModes_1.buildDescribePrompt)(promptsDir, actionPath, prefetched, describeLabels);
             const describeRun = await runPass('describe', describePrompt, (0, tools_1.createBugbitTools)(toolDeps, 'describe'), saveStreamLog);
             await uploadStreamLog(describeRun.streamLogPath, describeRun.runId, !runReview);
         }
@@ -1335,10 +1335,13 @@ function buildDescribePrefetchedSection(prefetched) {
     ];
     return `\n\n${lines.join('\n')}`;
 }
-function buildDescribePrompt(promptsDir, actionPath, prefetched) {
+function buildDescribePrompt(promptsDir, actionPath, prefetched, labels) {
     const describeTemplate = loadDescribePrompt(promptsDir, actionPath);
+    const configured = labels && labels.length > 0
+        ? `\n\n<configured_labels>\nAlso apply these labels (in addition to inferred type and review-effort): ${labels.join(', ')}\n</configured_labels>`
+        : '';
     return {
-        prompt: `${describeTemplate}${buildDescribePrefetchedSection(prefetched)}`,
+        prompt: `${describeTemplate}${buildDescribePrefetchedSection(prefetched)}${configured}`,
     };
 }
 
