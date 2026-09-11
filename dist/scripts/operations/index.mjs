@@ -29208,6 +29208,29 @@ function requirePullRequest(eventPath = process.env.GITHUB_EVENT_PATH) {
 }
 
 
+;// CONCATENATED MODULE: ./scripts/lib/list-pr-files.mjs
+/**
+ * Fetch every file in a pull request diff.
+ *
+ * `pulls.listFiles` defaults to 30 items per page. Without pagination, PRs with
+ * more than 30 changed files are silently truncated — reviews miss whole files
+ * and line-map validation rejects findings on page-2+ paths.
+ *
+ * @param {ReturnType<import('@actions/github').getOctokit>} octokit
+ * @param {string} owner
+ * @param {string} repo
+ * @param {number} pullNumber
+ * @returns {Promise<Array<Record<string, unknown>>>}
+ */
+async function listPullRequestFiles(octokit, owner, repo, pullNumber) {
+  return octokit.paginate(octokit.rest.pulls.listFiles, {
+    owner,
+    repo,
+    pull_number: pullNumber,
+    per_page: 100,
+  });
+}
+
 ;// CONCATENATED MODULE: external "fs"
 const external_fs_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("fs");
 ;// CONCATENATED MODULE: external "os"
@@ -33677,6 +33700,7 @@ function buildLineMap(files) {
 ;// CONCATENATED MODULE: ./scripts/lib/validate.mjs
 
 
+
 /**
  * @param {string} path
  * @param {number} line
@@ -33711,11 +33735,7 @@ function validateFinding(path, line, lineMap) {
  * @returns {Promise<Map<string, Set<number>>>}
  */
 async function fetchDiffLineMap(octokit, owner, repo, pullNumber) {
-  const { data: fileList } = await octokit.rest.pulls.listFiles({
-    owner,
-    repo,
-    pull_number: pullNumber,
-  });
+  const fileList = await listPullRequestFiles(octokit, owner, repo, pullNumber);
 
   const files = mapPullRequestFiles(fileList);
 
@@ -33723,6 +33743,7 @@ async function fetchDiffLineMap(octokit, owner, repo, pullNumber) {
 }
 
 ;// CONCATENATED MODULE: ./scripts/lib/operations.mjs
+
 
 
 
@@ -33754,11 +33775,7 @@ async function getDiff(deps) {
   const octokit = createClient(deps.token);
   const { owner, repo } = parseRepo(deps.repository);
 
-  const { data: fileList } = await octokit.rest.pulls.listFiles({
-    owner,
-    repo,
-    pull_number: pr.number,
-  });
+  const fileList = await listPullRequestFiles(octokit, owner, repo, pr.number);
 
   const files = mapPullRequestFiles(fileList);
 

@@ -1,4 +1,5 @@
 import { requirePullRequest } from './event.mjs';
+import { listPullRequestFiles } from './list-pr-files.mjs';
 import { createClient, parseRepo } from './octokit.mjs';
 import { mapPullRequestFiles, DIFF_SIZE_LIMIT } from './parse-patch.mjs';
 import { fetchDiffLineMap, validateFinding } from './validate.mjs';
@@ -29,11 +30,7 @@ export async function getDiff(deps) {
   const octokit = createClient(deps.token);
   const { owner, repo } = parseRepo(deps.repository);
 
-  const { data: fileList } = await octokit.rest.pulls.listFiles({
-    owner,
-    repo,
-    pull_number: pr.number,
-  });
+  const fileList = await listPullRequestFiles(octokit, owner, repo, pr.number);
 
   const files = mapPullRequestFiles(fileList);
 

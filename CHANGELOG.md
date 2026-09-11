@@ -8,6 +8,10 @@ All notable changes to this project will be documented in this file.
 
 - `code-review` mode now invokes Cursor `/review-bugbot` (aliases: `review-bugbot`, `bugbot`). `/review-security` and `/simplify` are unchanged. The GHA overlay still forbids launching IDE review subagents.
 
+### Fixed
+
+- Paginate `pulls.listFiles` (100 files per page) when prefetching the PR diff and building the comment line map. GitHub returns 30 files per page by default; PRs with more than 30 changed files were silently truncated.
+
 ## [1.1.1] - 2026-07-06
 
 ### Fixed

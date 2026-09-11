@@ -237,6 +237,12 @@ If `save-stream-log` is `false`, omit `actions: write` to keep the token scope m
 
 # Limitations
 
+### Pull request file pagination
+
+bugbit paginates GitHub's `pulls.listFiles` API (100 files per page) for both the review diff and comment line-map. PRs with more than 30 changed files are fully covered.
+
+GitHub itself still caps that endpoint at **3,000 files** per pull request. Beyond that, the API truncates and bugbit can only review the returned set.
+
 ### Fork pull requests
 
 bugbit cannot post review comments on pull requests from forks. `GITHUB_TOKEN` is read-only for fork PR heads, so the action fails fast with a clear error. Use same-repository branches or a dedicated token/workflow pattern if you need fork coverage.
