@@ -49,6 +49,10 @@ After changing `src/` or `scripts/lib/`:
 
 Do not hand-edit `dist/` except by running the bundle scripts.
 
+## Stacked PRs
+
+For epics that are too large for one PR, use an **empty integration branch** (`feat/<epic>` from `main`, no commits on it) and a `gh stack` of small PRs that land there first. See [AGENTS.md](AGENTS.md) / [CLAUDE.md](CLAUDE.md). Do not open `feat/<epic> → main` until the first layer has merged.
+
 ## Pull request expectations
 
 - Keep diffs focused; match existing TypeScript and Jest conventions
