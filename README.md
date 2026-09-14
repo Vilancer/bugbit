@@ -12,6 +12,18 @@ bugbit is a lightweight, self-hosted GitHub Action that reviews pull requests us
 
 No walls of text at the bottom of the conversation — just line-anchored feedback from the agent you already trust.
 
+## Providers
+
+Today bugbit reviews through **Cursor** (your Cursor API key and the Cursor agent runtime). Additional providers are planned so the same GitHub Action can run the same review/describe workflow with other agents:
+
+| Provider | Status |
+|----------|--------|
+| [Cursor](https://cursor.com) | **Supported** — current runtime (`cursor-api-key`, `model`) |
+| [OpenAI Codex](https://openai.com/codex) | **Planned** — future provider integration |
+| [Anthropic Claude](https://claude.com) | **Planned** — future provider integration |
+
+There is no provider input yet. Workflows keep using Cursor until those integrations ship.
+
 > **Version pinning:** Examples use `Vilancer/bugbit@v1` (latest v1.x). Pin to `@v1.0.0` or a commit SHA for an exact version.
 >
 > **Marketplace:** The listing name is `vilancer-bugbit` (GitHub user `bugbit` owns that short name). Workflows still reference the repo: `uses: Vilancer/bugbit@v1`.
