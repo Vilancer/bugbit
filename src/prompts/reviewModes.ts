@@ -23,12 +23,26 @@ const MODE_ALIASES: Record<string, ReviewMode> = {
 const ALLOWED_MODE_LIST =
   'code-review, security-review, simplify (aliases: review-bugbot, bugbot, review-security)';
 
+function canonicalizeMode(mode: string): string {
+  return Object.hasOwn(MODE_ALIASES, mode) ? MODE_ALIASES[mode] : mode;
+}
+
 export function parseReviewModes(input: string): string[] {
-  return input
-    .split(',')
-    .map((mode) => mode.trim())
-    .filter(Boolean)
-    .map((mode) => MODE_ALIASES[mode] ?? mode);
+  const seen = new Set<string>();
+  const modes: string[] = [];
+  for (const raw of input.split(',')) {
+    const mode = raw.trim();
+    if (!mode) {
+      continue;
+    }
+    const canonical = canonicalizeMode(mode);
+    if (seen.has(canonical)) {
+      continue;
+    }
+    seen.add(canonical);
+    modes.push(canonical);
+  }
+  return modes;
 }
 
 export function validateReviewModes(modes: string[]): void {

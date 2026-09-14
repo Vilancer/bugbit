@@ -35,6 +35,15 @@ describe('parseReviewModes', () => {
       'simplify',
     ]);
   });
+
+  it('deduplicates aliases that map to the same mode', () => {
+    expect(parseReviewModes('review-bugbot, bugbot, code-review')).toEqual(['code-review']);
+    expect(parseReviewModes('security-review, review-security')).toEqual(['security-review']);
+  });
+
+  it('does not treat Object.prototype keys as aliases', () => {
+    expect(parseReviewModes('constructor')).toEqual(['constructor']);
+  });
 });
 
 describe('validateReviewModes', () => {
@@ -68,8 +77,8 @@ describe('buildSkillPrompt', () => {
 
     const { prompt, modes } = buildSkillPrompt('review-bugbot, bugbot', promptsDir, actionPath);
 
-    expect(modes).toEqual(['code-review', 'code-review']);
-    expect(prompt.startsWith('/review-bugbot\n/review-bugbot\n\n')).toBe(true);
+    expect(modes).toEqual(['code-review']);
+    expect(prompt.startsWith('/review-bugbot\n\n')).toBe(true);
   });
 
   it('injects /simplify for simplify mode', () => {
