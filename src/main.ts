@@ -68,9 +68,9 @@ async function run(): Promise<void> {
       .map((label) => label.trim())
       .filter(Boolean);
 
-    if (autoDescribe && describeLabels.length > 0) {
+    if (autoDescribe) {
       core.warning(
-        'describe-labels configured — consumer job must include permissions: issues: write and pull-requests: write',
+        'auto-describe infers PR labels — consumer job must include permissions: issues: write and pull-requests: write',
       );
     }
 

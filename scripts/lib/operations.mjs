@@ -374,6 +374,77 @@ export async function updatePrDescription(deps, { title, body }) {
   };
 }
 
+const INFERRED_TYPE_LABELS = new Set([
+  'feature',
+  'bug-fix',
+  'enhancement',
+  'refactor',
+  'docs',
+  'chore',
+  'breaking-change',
+]);
+
+const REVIEW_EFFORT_LABEL = /^Review effort [1-5]\/5$/;
+const MAX_LABEL_NAME = 50;
+const MAX_LABELS = 20;
+
+/**
+ * Keep inferred catalog labels plus workflow-configured describe-labels.
+ * Drops arbitrary agent-invented names so prompt injection cannot create
+ * automerge / security-reviewed style labels.
+ * @param {{ describeLabels?: string[] }} deps
+ * @param {unknown} agentLabels
+ * @returns {string[]}
+ */
+export function resolvePrLabels(deps, agentLabels) {
+  const configured = [];
+  if (Array.isArray(deps.describeLabels)) {
+    for (const raw of deps.describeLabels) {
+      if (typeof raw !== 'string') {
+        continue;
+      }
+      const name = raw.trim();
+      if (name && name.length <= MAX_LABEL_NAME) {
+        configured.push(name);
+      }
+    }
+  }
+
+  const inferred = [];
+  if (Array.isArray(agentLabels)) {
+    for (const raw of agentLabels) {
+      if (typeof raw !== 'string') {
+        continue;
+      }
+      const name = raw.trim();
+      if (!name || name.length > MAX_LABEL_NAME) {
+        continue;
+      }
+      if (
+        INFERRED_TYPE_LABELS.has(name) ||
+        REVIEW_EFFORT_LABEL.test(name) ||
+        configured.includes(name)
+      ) {
+        inferred.push(name);
+      }
+    }
+  }
+
+  const merged = [];
+  const seen = new Set();
+  for (const name of [...inferred, ...configured]) {
+    if (seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    merged.push(name);
+    if (merged.length >= MAX_LABELS) {
+      break;
+    }
+  }
+  return merged;
+}
+
 /**
  * Apply a list of labels to the PR (uses the issues API, requires issues: write).
  * Creates missing labels so inferred type / review-effort names work on first use.
@@ -390,7 +461,17 @@ export async function setPrLabels(deps, { labels }) {
     };
   }
 
-  if (!Array.isArray(labels) || labels.length === 0) {
+  if (!Array.isArray(labels)) {
+    return {
+      error: {
+        code: 'INVALID_ARGS',
+        message: 'labels must be a non-empty array',
+      },
+    };
+  }
+
+  const resolved = resolvePrLabels(deps, labels);
+  if (resolved.length === 0) {
     return {
       error: {
         code: 'INVALID_ARGS',
@@ -403,7 +484,7 @@ export async function setPrLabels(deps, { labels }) {
   const octokit = createClient(deps.token);
   const { owner, repo } = parseRepo(deps.repository);
 
-  for (const name of labels) {
+  for (const name of resolved) {
     try {
       await octokit.rest.issues.getLabel({ owner, repo, name });
     } catch (error) {
@@ -425,7 +506,7 @@ export async function setPrLabels(deps, { labels }) {
     owner,
     repo,
     issue_number: pr.number,
-    labels,
+    labels: resolved,
   });
-  return { applied: labels };
+  return { applied: resolved };
 }
