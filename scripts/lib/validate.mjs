@@ -1,4 +1,5 @@
 import { mapPullRequestFiles, buildLineMap } from './parse-patch.mjs';
+import { listPullRequestFiles } from './list-pr-files.mjs';
 
 /**
  * @param {string} path
@@ -34,11 +35,7 @@ export function validateFinding(path, line, lineMap) {
  * @returns {Promise<Map<string, Set<number>>>}
  */
 export async function fetchDiffLineMap(octokit, owner, repo, pullNumber) {
-  const { data: fileList } = await octokit.rest.pulls.listFiles({
-    owner,
-    repo,
-    pull_number: pullNumber,
-  });
+  const fileList = await listPullRequestFiles(octokit, owner, repo, pullNumber);
 
   const files = mapPullRequestFiles(fileList);
 

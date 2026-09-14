@@ -93,6 +93,91 @@ export function mapPullRequestFiles(fileList) {
 }
 
 /**
+ * Drop per-line hunk bodies; keep hunk range headers only.
+ * @param {Array<Record<string, unknown>>} files
+ */
+export function slimFilesToHunkRanges(files) {
+  return files.map((file) => {
+    if (file.status === 'deleted' || !Array.isArray(file.hunks)) {
+      const entry = { path: file.path, status: file.status };
+      if (file.previous_filename) {
+        entry.previous_filename = file.previous_filename;
+      }
+      return entry;
+    }
+
+    const entry = {
+      path: file.path,
+      status: file.status,
+      hunks: file.hunks.map((hunk) => ({
+        oldStart: hunk.oldStart,
+        oldLines: hunk.oldLines,
+        newStart: hunk.newStart,
+        newLines: hunk.newLines,
+      })),
+    };
+
+    if (file.previous_filename) {
+      entry.previous_filename = file.previous_filename;
+    }
+
+    return entry;
+  });
+}
+
+/**
+ * Keep path/status (+ rename) only — no hunks.
+ * @param {Array<Record<string, unknown>>} files
+ */
+export function slimFilesToPathsOnly(files) {
+  return files.map((file) => {
+    const entry = { path: file.path, status: file.status };
+    if (file.previous_filename) {
+      entry.previous_filename = file.previous_filename;
+    }
+    return entry;
+  });
+}
+
+/**
+ * Pick the richest diff payload that fits under DIFF_SIZE_LIMIT.
+ * Never fails for size alone — always returns a usable inventory.
+ *
+ * @param {Array<Record<string, unknown>>} fullFiles
+ * @param {number} [limit]
+ * @returns {{ diffMode: 'full' | 'hunk_ranges' | 'paths_only', files: Array<Record<string, unknown>>, truncated?: boolean }}
+ */
+export function buildSizedDiff(fullFiles, limit = DIFF_SIZE_LIMIT) {
+  const fullOutput = { diffMode: 'full', files: fullFiles };
+  if (JSON.stringify(fullOutput).length <= limit) {
+    return fullOutput;
+  }
+
+  const hunkRangesFiles = slimFilesToHunkRanges(fullFiles);
+  const hunkRangesOutput = { diffMode: 'hunk_ranges', files: hunkRangesFiles };
+  if (JSON.stringify(hunkRangesOutput).length <= limit) {
+    return hunkRangesOutput;
+  }
+
+  const pathsOnlyFiles = slimFilesToPathsOnly(fullFiles);
+  const pathsOnlyOutput = { diffMode: 'paths_only', files: pathsOnlyFiles };
+  if (JSON.stringify(pathsOnlyOutput).length <= limit) {
+    return pathsOnlyOutput;
+  }
+
+  const truncated = [];
+  const bounded = { diffMode: 'paths_only', truncated: true, files: truncated };
+  for (const file of pathsOnlyFiles) {
+    truncated.push(file);
+    if (JSON.stringify(bounded).length > limit) {
+      truncated.pop();
+      break;
+    }
+  }
+  return bounded;
+}
+
+/**
  * @param {Array<{ path: string, status: string, hunks?: Array<{ lines: Array<{ type: string, newLine?: number }> }> }>} files
  * @returns {Map<string, Set<number>>}
  */

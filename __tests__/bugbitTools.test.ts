@@ -13,6 +13,9 @@ export async function getDiff() {
   return { files: [{ path: 'src/a.ts', status: 'modified' }] };
 }
 export async function postReview(_deps, findings) {
+  if (!findings.length) {
+    return { posted: [], reviewId: 7, cleanSummary: true };
+  }
   return { posted: findings, reviewId: null };
 }
 export async function postInlineComment(_deps, input) {
@@ -21,13 +24,26 @@ export async function postInlineComment(_deps, input) {
   }
   return { posted: true, path: input.path, line: input.line };
 }
+export async function updatePrDescription(_deps, input) {
+  return { updated: true, body: input.body };
+}
+export async function setPrLabels(_deps, input) {
+  return { applied: input.labels };
+}
 `;
 
-const TOOL_NAMES = [
+const REVIEW_TOOL_NAMES = [
   'get_pr_context',
   'get_diff',
   'post_review',
   'post_inline_comment',
+] as const;
+
+const DESCRIBE_TOOL_NAMES = [
+  'get_pr_context',
+  'get_diff',
+  'update_pr_description',
+  'set_pr_labels',
 ] as const;
 
 function setupActionPath(): string {
@@ -55,7 +71,7 @@ describe('createBugbitTools', () => {
     fs.rmSync(actionPath, { recursive: true, force: true });
   });
 
-  it('returns four custom tools with schema and execute handlers', () => {
+  it('returns custom tools with schema and execute handlers', () => {
     const tools = createBugbitTools({
       githubToken: 'test-token',
       eventPath: '/tmp/event.json',
@@ -63,14 +79,30 @@ describe('createBugbitTools', () => {
       actionPath,
     });
 
-    expect(Object.keys(tools).sort()).toEqual([...TOOL_NAMES].sort());
+    expect(Object.keys(tools).sort()).toEqual([...REVIEW_TOOL_NAMES].sort());
 
-    for (const name of TOOL_NAMES) {
+    for (const name of REVIEW_TOOL_NAMES) {
       const tool = tools[name] as SDKCustomTool;
       expect(tool.description).toBeTruthy();
       expect(tool.inputSchema).toBeDefined();
       expect(typeof tool.execute).toBe('function');
     }
+  });
+
+  it('scopes describe-pass tools to description updates only', () => {
+    const tools = createBugbitTools(
+      {
+        githubToken: 'test-token',
+        eventPath: '/tmp/event.json',
+        repository: 'owner/repo',
+        actionPath,
+      },
+      'describe',
+    );
+
+    expect(Object.keys(tools).sort()).toEqual([...DESCRIBE_TOOL_NAMES].sort());
+    expect(tools.post_review).toBeUndefined();
+    expect(tools.post_inline_comment).toBeUndefined();
   });
 
   it('does not expose token fields in tool input schemas', () => {
@@ -81,7 +113,7 @@ describe('createBugbitTools', () => {
       actionPath,
     });
 
-    for (const name of TOOL_NAMES) {
+    for (const name of REVIEW_TOOL_NAMES) {
       const schema = tools[name].inputSchema as {
         properties?: Record<string, unknown>;
       };
@@ -118,7 +150,7 @@ describe('createBugbitTools', () => {
     });
 
     const result = await tools.post_review.execute({ findings: [] }, {});
-    expect(result).toEqual({ posted: [], reviewId: null });
+    expect(result).toEqual({ posted: [], reviewId: 7, cleanSummary: true });
   });
 
   it('post_inline_comment.execute returns structured error for invalid path', async () => {
@@ -136,6 +168,21 @@ describe('createBugbitTools', () => {
     expect(result).toEqual({
       error: { code: 'INVALID_PATH', message: 'path not in diff' },
     });
+  });
+
+  it('update_pr_description.execute is available on the describe pass', async () => {
+    const tools = createBugbitTools(
+      {
+        githubToken: 'test-token',
+        eventPath: '/tmp/event.json',
+        repository: 'owner/repo',
+        actionPath,
+      },
+      'describe',
+    );
+
+    const result = await tools.update_pr_description.execute({ body: '### Description' }, {});
+    expect(result).toEqual({ updated: true, body: '### Description' });
   });
 });
 

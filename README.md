@@ -7,10 +7,22 @@ bugbit is a lightweight, self-hosted GitHub Action that reviews pull requests us
 ## How it works
 
 1. Validates `GITHUB_TOKEN` permissions and prefetches PR context and diff
-2. Invokes Cursor built-in review skills (`/code-review`, `/review-security`, `/simplify`) with a GitHub Actions overlay for read-only, line-anchored findings
+2. Invokes Cursor built-in review skills (`/review-bugbot`, `/review-security`, `/simplify`) with a GitHub Actions overlay for read-only, line-anchored findings
 3. Posts findings as **inline PR review comments** on the exact diff lines via custom tools (`post_review`)
 
 No walls of text at the bottom of the conversation — just line-anchored feedback from the agent you already trust.
+
+## Providers
+
+Today bugbit reviews through **Cursor** (your Cursor API key and the Cursor agent runtime). Additional providers are planned so the same GitHub Action can run the same review/describe workflow with other agents:
+
+| Provider | Status |
+|----------|--------|
+| [Cursor](https://cursor.com) | **Supported** — current runtime (`cursor-api-key`, `model`) |
+| [OpenAI Codex](https://openai.com/codex) | **Planned** — future provider integration |
+| [Anthropic Claude](https://claude.com) | **Planned** — future provider integration |
+
+There is no provider input yet. Workflows keep using Cursor until those integrations ship.
 
 > **Version pinning:** Examples use `Vilancer/bugbit@v1` (latest v1.x). Pin to `@v1.0.0` or a commit SHA for an exact version.
 >
@@ -81,6 +93,8 @@ jobs:
     model: composer-2.5
 
     # Comma-separated review modes: code-review, security-review, simplify
+    # (code-review invokes /review-bugbot; aliases: review-bugbot, bugbot.
+    #  security-review alias: review-security)
     # Default: code-review
     review-modes: code-review
 
@@ -91,6 +105,26 @@ jobs:
     # Pull request number. Required for workflow_dispatch unless the event
     # already includes pull_request. Ignored on pull_request triggers.
     pr-number: ${{ github.event.pull_request.number }}
+
+    # When true (default), empty findings post a visible LGTM COMMENT review.
+    post-clean-summary: true
+
+    # Optional override for the clean-summary review body.
+    # clean-summary-body: |
+    #   ## bugbit: LGTM — no findings
+    #
+    #   No issues reported on this diff.
+
+    # When true, run an additional agent pass first that updates the PR
+    # description with: type, summary bullets, mermaid diagram, file
+    # walkthrough, and test plan. Needs pull-requests: write and
+    # issues: write (inferred and describe-labels use the issues API).
+    # Set review-modes to an empty string for describe-only.
+    # auto-describe: true
+
+    # Comma-separated labels to apply after the describe pass.
+    # Needs issues: write permission.
+    # describe-labels: "Review effort 4/5"
 ```
 
 | Input | Required | Default | Notes |
@@ -98,9 +132,13 @@ jobs:
 | `cursor-api-key` | yes | — | Repository secret with your Cursor API key |
 | `github-token` | yes | `${{ github.token }}` | Needs job `permissions` below |
 | `model` | no | `composer-2.5` | Cursor model id |
-| `review-modes` | no | `code-review` | Comma-separated: `code-review`, `security-review`, `simplify` |
+| `review-modes` | no | `code-review` | Comma-separated: `code-review` (`/review-bugbot`), `security-review`, `simplify`. Aliases: `review-bugbot`, `bugbot`, `review-security` |
 | `save-stream-log` | no | `false` | JSONL debug artifact; needs `actions: write` |
 | `pr-number` | no | — | Required for `workflow_dispatch` when the event has no `pull_request`; ignored otherwise |
+| `post-clean-summary` | no | `true` | Post a visible LGTM COMMENT review when `post_review` receives zero findings |
+| `clean-summary-body` | no | LGTM markdown | Body used for the clean-summary review |
+| `auto-describe` | no | `false` | Append a structured PR description once per PR (skipped if markers already present) |
+| `describe-labels` | no | `''` | Extra labels to apply after describe; needs `issues: write`. Describe pass also infers type + review-effort labels |
 
 # Scenarios
 
@@ -205,8 +243,8 @@ Each `review-modes` value maps to a Cursor built-in skill:
 
 | Mode | Cursor skill | Purpose |
 |------|--------------|---------|
-| `code-review` | `/code-review` | General code review |
-| `security-review` | `/review-security` | Security-focused review |
+| `code-review` | `/review-bugbot` | General code review (aliases: `review-bugbot`, `bugbot`) |
+| `security-review` | `/review-security` | Security-focused review (alias: `review-security`) |
 | `simplify` | `/simplify` | Complexity and simplification suggestions |
 
 Pass multiple modes as a comma-separated list: `code-review, security-review, simplify`.
@@ -234,7 +272,30 @@ permissions:
 
 If `save-stream-log` is `false`, omit `actions: write` to keep the token scope minimal.
 
+**With auto-describe labels (`auto-describe: true` and inferred / `describe-labels`):**
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+```
+
 # Limitations
+
+### Pull request file pagination
+
+bugbit paginates GitHub's `pulls.listFiles` API (100 files per page) for both the review diff and comment line-map. PRs with more than 30 changed files are fully covered.
+
+GitHub itself still caps that endpoint at **3,000 files** per pull request. Beyond that, the API truncates and bugbit can only review the returned set.
+
+### Large diffs
+
+Prefetched / `get_diff` payloads are capped at ~1MB of JSON. When the full parsed hunk body would exceed that, bugbit progressively slims the payload (`diffMode`: `full` → `hunk_ranges` → `paths_only`) so the agent still receives changed paths. For slim modes, the agent reads files for targeted context. Inline comments are still validated against the full GitHub line map (not the slimmed prefetch). If even `paths_only` exceeds the cap, the inventory is truncated (`truncated: true`).
+
+### PR title and body
+
+`get_pr_context` (and prefetch) includes the PR `title` and `body`. A clear summary and test plan in the PR description helps the agent stay on the stated objective.
 
 ### Fork pull requests
 
@@ -262,6 +323,10 @@ The action uses the `node24` runtime (`action.yml`). Use `runs-on: ubuntu-latest
 # Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for local development, testing, and bundle instructions.
+
+# Credits
+
+The 1.2.0 auto-describe, LGTM clean-summary, large-diff slimming, and related workflow ideas were inspired by [@JuicyBurger](https://github.com/JuicyBurger)'s fork [JuicyBurger/bugbit](https://github.com/JuicyBurger/bugbit).
 
 # License
 

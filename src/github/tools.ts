@@ -17,6 +17,11 @@ type OpsModule = {
     deps: OpsDeps,
     input: { path: string; line: number; body: string },
   ) => Promise<unknown>;
+  updatePrDescription: (
+    deps: OpsDeps,
+    input: { title?: string; body: string },
+  ) => Promise<unknown>;
+  setPrLabels: (deps: OpsDeps, input: { labels: string[] }) => Promise<unknown>;
 };
 
 const opsPromises = new Map<string, Promise<OpsModule>>();
@@ -75,15 +80,11 @@ function toOpsDeps(deps: BugbitToolDeps): OpsDeps {
     token: deps.githubToken,
     eventPath: deps.eventPath,
     repository: deps.repository,
+    postCleanSummary: deps.postCleanSummary,
+    cleanSummaryBody: deps.cleanSummaryBody,
+    autoDescribe: deps.autoDescribe,
+    describeLabels: deps.describeLabels,
   };
-}
-
-function isDiffTooLarge(error: unknown): error is Error & { code: string } {
-  return (
-    error instanceof Error &&
-    'code' in error &&
-    (error as Error & { code?: string }).code === 'DIFF_TOO_LARGE'
-  );
 }
 
 export async function checkReviewPermissions(deps: BugbitToolDeps): Promise<void> {
@@ -129,24 +130,12 @@ export async function prefetchPrData(deps: BugbitToolDeps): Promise<PrefetchedPr
 
   core.info('Prefetching PR context and diff…');
   const context = await ops.getPrContext(toolDeps);
-
-  try {
-    const diff = await ops.getDiff(toolDeps);
-    const fileCount = Array.isArray((diff as { files?: unknown[] })?.files)
-      ? (diff as { files: unknown[] }).files.length
-      : 0;
-    core.info(`Prefetched diff: ${fileCount} changed file(s)`);
-    return { context, diff };
-  } catch (error) {
-    if (isDiffTooLarge(error)) {
-      core.warning(`Diff too large to prefetch: ${error.message}; agent must call get_diff`);
-      return {
-        context,
-        diffError: { code: error.code, message: error.message },
-      };
-    }
-    throw error;
-  }
+  const diff = await ops.getDiff(toolDeps);
+  const typedDiff = diff as { files?: unknown[]; diffMode?: string };
+  const fileCount = Array.isArray(typedDiff.files) ? typedDiff.files.length : 0;
+  const diffMode = typeof typedDiff.diffMode === 'string' ? typedDiff.diffMode : 'full';
+  core.info(`Prefetched diff: ${fileCount} changed file(s) (diffMode=${diffMode})`);
+  return { context, diff };
 }
 
 export function isForkPullRequest(eventPath: string): boolean {
@@ -157,101 +146,153 @@ export function isForkPullRequest(eventPath: string): boolean {
   return pr.head?.repo?.full_name !== pr.base?.repo?.full_name;
 }
 
-export function createBugbitTools(deps: BugbitToolDeps): Record<string, SDKCustomTool> {
+export type BugbitToolPass = 'describe' | 'review';
+
+export function createBugbitTools(
+  deps: BugbitToolDeps,
+  pass: BugbitToolPass = 'review',
+): Record<string, SDKCustomTool> {
   const toolDeps = toOpsDeps(deps);
 
-  return {
-    get_pr_context: {
-      description:
-        'Returns PR number, head/base branch names, and commit SHAs for the current pull_request event.',
-      inputSchema: {
-        type: 'object',
-        properties: {},
-        additionalProperties: false,
-      },
-      execute: async () => {
-        core.info('[bugbit] get_pr_context called');
-        const ops = await loadOps(deps.actionPath);
-        return (await ops.getPrContext(toolDeps)) as SDKJsonValue;
-      },
+  const get_pr_context: SDKCustomTool = {
+    description:
+      'Returns PR number, title, body, head/base branch names, and commit SHAs for the current pull_request event.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
     },
-    get_diff: {
-      description:
-        'Returns changed files and parsed diff hunks for the current PR; use as the review scope.',
-      inputSchema: {
-        type: 'object',
-        properties: {},
-        additionalProperties: false,
-      },
-      execute: async () => {
-        core.info('[bugbit] get_diff called');
-        try {
-          const ops = await loadOps(deps.actionPath);
-          return (await ops.getDiff(toolDeps)) as SDKJsonValue;
-        } catch (error) {
-          if (isDiffTooLarge(error)) {
-            return { error: { code: error.code, message: error.message } } as SDKJsonValue;
-          }
-          throw error;
-        }
-      },
-    },
-    post_review: {
-      description:
-        'Posts multiple inline comments as one PR review; prefer this over repeated post_inline_comment calls.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          findings: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                mode: { type: 'string' },
-                path: { type: 'string' },
-                line: { type: 'number' },
-                body: { type: 'string' },
-              },
-              required: ['mode', 'path', 'line', 'body'],
-              additionalProperties: false,
-            },
-          },
-        },
-        required: ['findings'],
-        additionalProperties: false,
-      },
-      execute: async (args) => {
-        const findings = args.findings as unknown[];
-        core.info(`[bugbit] post_review called with ${findings.length} finding(s)`);
-        const ops = await loadOps(deps.actionPath);
-        const result = (await ops.postReview(toolDeps, findings)) as SDKJsonValue;
-        core.info('[bugbit] post_review completed');
-        return result;
-      },
-    },
-    post_inline_comment: {
-      description:
-        'Posts a single inline comment on a specific file and line in the PR diff.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          path: { type: 'string' },
-          line: { type: 'number' },
-          body: { type: 'string' },
-        },
-        required: ['path', 'line', 'body'],
-        additionalProperties: false,
-      },
-      execute: async (args) => {
-        core.info(`[bugbit] post_inline_comment called for ${args.path}:${args.line}`);
-        const ops = await loadOps(deps.actionPath);
-        const result = await ops.postInlineComment(toolDeps, {
-          path: args.path as string,
-          line: args.line as number,
-          body: args.body as string,
-        });
-        return result as SDKJsonValue;
-      },
+    execute: async () => {
+      core.info('[bugbit] get_pr_context called');
+      const ops = await loadOps(deps.actionPath);
+      return (await ops.getPrContext(toolDeps)) as SDKJsonValue;
     },
   };
+
+  const set_pr_labels: SDKCustomTool = {
+    description:
+      'Applies labels to the PR (issues API). Creates missing labels. Requires issues: write permission.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        labels: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+      },
+      required: ['labels'],
+      additionalProperties: false,
+    },
+    execute: async (args) => {
+      core.info(`[bugbit] set_pr_labels called with ${(args.labels as string[]).length} label(s)`);
+      const ops = await loadOps(deps.actionPath);
+      const result = await ops.setPrLabels(toolDeps, {
+        labels: args.labels as string[],
+      });
+      return result as SDKJsonValue;
+    },
+  };
+
+  const get_diff: SDKCustomTool = {
+    description:
+      'Returns changed files for the current PR with diffMode (full | hunk_ranges | paths_only). Prefer prefetched data; use when missing.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+    execute: async () => {
+      core.info('[bugbit] get_diff called');
+      const ops = await loadOps(deps.actionPath);
+      return (await ops.getDiff(toolDeps)) as SDKJsonValue;
+    },
+  };
+
+  const post_review: SDKCustomTool = {
+    description:
+      'Posts multiple inline comments as one PR review; prefer this over repeated post_inline_comment calls. Pass an empty findings array when there are no issues (may post an LGTM summary when configured).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        findings: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              mode: { type: 'string' },
+              path: { type: 'string' },
+              line: { type: 'number' },
+              body: { type: 'string' },
+            },
+            required: ['mode', 'path', 'line', 'body'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['findings'],
+      additionalProperties: false,
+    },
+    execute: async (args) => {
+      const findings = args.findings as unknown[];
+      core.info(`[bugbit] post_review called with ${findings.length} finding(s)`);
+      const ops = await loadOps(deps.actionPath);
+      const result = (await ops.postReview(toolDeps, findings)) as SDKJsonValue;
+      core.info('[bugbit] post_review completed');
+      return result;
+    },
+  };
+
+  const post_inline_comment: SDKCustomTool = {
+    description:
+      'Posts a single inline comment on a specific file and line in the PR diff.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string' },
+        line: { type: 'number' },
+        body: { type: 'string' },
+      },
+      required: ['path', 'line', 'body'],
+      additionalProperties: false,
+    },
+    execute: async (args) => {
+      core.info(`[bugbit] post_inline_comment called for ${args.path}:${args.line}`);
+      const ops = await loadOps(deps.actionPath);
+      const result = await ops.postInlineComment(toolDeps, {
+        path: args.path as string,
+        line: args.line as number,
+        body: args.body as string,
+      });
+      return result as SDKJsonValue;
+    },
+  };
+
+  const update_pr_description: SDKCustomTool = {
+    description:
+      'Appends an auto-describe section after the developer PR body (replaces prior auto-describe on re-run). Optionally updates title. Requires pull-requests: write.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string' },
+        body: { type: 'string' },
+      },
+      required: ['body'],
+      additionalProperties: false,
+    },
+    execute: async (args) => {
+      core.info('[bugbit] update_pr_description called');
+      const ops = await loadOps(deps.actionPath);
+      const result = await ops.updatePrDescription(toolDeps, {
+        body: args.body as string,
+        ...(args.title ? { title: args.title as string } : {}),
+      });
+      return result as SDKJsonValue;
+    },
+  };
+
+  if (pass === 'describe') {
+    return { get_pr_context, get_diff, update_pr_description, set_pr_labels };
+  }
+
+  return { get_pr_context, get_diff, post_review, post_inline_comment };
 }

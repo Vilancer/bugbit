@@ -18,6 +18,10 @@ let mapPullRequestFiles: (
     patch?: string;
   }>,
 ) => Array<{ path: string; status: string; previous_filename?: string; hunks?: Hunk[] }>;
+let buildSizedDiff: (
+  files: Array<Record<string, unknown>>,
+  limit?: number,
+) => { diffMode: string; files: Array<Record<string, unknown>>; truncated?: boolean };
 
 beforeAll(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -26,6 +30,7 @@ beforeAll(() => {
   buildLineMap = mod.buildLineMap;
   mapGitHubStatus = mod.mapGitHubStatus;
   mapPullRequestFiles = mod.mapPullRequestFiles;
+  buildSizedDiff = mod.buildSizedDiff;
 });
 
 describe('parseUnifiedPatch', () => {
@@ -133,5 +138,55 @@ describe('mapPullRequestFiles', () => {
     expect(files).toEqual([
       { path: 'src/large.ts', status: 'modified', hunks: [] },
     ]);
+  });
+});
+
+describe('buildSizedDiff', () => {
+  it('keeps full hunks when under the size limit', () => {
+    const files = mapPullRequestFiles([
+      {
+        filename: 'src/a.ts',
+        status: 'modified',
+        patch: '@@ -1 +1 @@\n-old\n+new',
+      },
+    ]);
+
+    const result = buildSizedDiff(files, 10_000);
+    expect(result.diffMode).toBe('full');
+    expect(result.files[0].hunks).toBeDefined();
+  });
+
+  it('falls back to hunk_ranges then paths_only when over the limit', () => {
+    const files = mapPullRequestFiles(
+      Array.from({ length: 8 }, (_, i) => ({
+        filename: `src/f${i}.ts`,
+        status: 'modified',
+        patch: `@@ -1,20 +1,20 @@\n${' context\n'.repeat(10)}+added line ${i}\n`,
+      })),
+    );
+
+    const hunkRanges = buildSizedDiff(files, 900);
+    expect(hunkRanges.diffMode).toBe('hunk_ranges');
+    expect((hunkRanges.files[0] as { hunks?: unknown[] }).hunks?.[0]).not.toHaveProperty('lines');
+
+    const pathsOnly = buildSizedDiff(files, 800);
+    expect(pathsOnly.diffMode).toBe('paths_only');
+    expect(pathsOnly.files[0]).not.toHaveProperty('hunks');
+    expect(pathsOnly.files).toHaveLength(8);
+  });
+
+  it('truncates paths_only when even the inventory exceeds the limit', () => {
+    const files = mapPullRequestFiles(
+      Array.from({ length: 20 }, (_, i) => ({
+        filename: `src/very-long-path-name-for-size-${i}.ts`,
+        status: 'modified',
+      })),
+    );
+
+    const result = buildSizedDiff(files, 80);
+    expect(result.diffMode).toBe('paths_only');
+    expect(result.truncated).toBe(true);
+    expect(result.files.length).toBeLessThan(20);
+    expect(JSON.stringify(result).length).toBeLessThanOrEqual(80);
   });
 });

@@ -11,8 +11,5 @@ const deps = {
 try {
   printJson(await getDiff(deps));
 } catch (e) {
-  if (e.code === 'DIFF_TOO_LARGE') {
-    fail('DIFF_TOO_LARGE', e.message);
-  }
   fail('GET_DIFF_ERROR', e.message);
 }

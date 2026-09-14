@@ -29149,10 +29149,18 @@ var __webpack_exports__ = {};
 
 // EXPORTS
 __nccwpck_require__.d(__webpack_exports__, {
+  Oi: () => (/* binding */ AUTO_DESCRIBE_END),
+  r$: () => (/* binding */ AUTO_DESCRIBE_START),
   Gw: () => (/* binding */ getDiff),
   C0: () => (/* binding */ getPrContext),
+  cT: () => (/* binding */ hasAutoDescribeSection),
+  Tl: () => (/* binding */ mergeAutoDescribeBody),
   Zb: () => (/* binding */ postInlineComment),
-  Xc: () => (/* binding */ postReview)
+  Xc: () => (/* binding */ postReview),
+  er: () => (/* binding */ resolvePrLabels),
+  CD: () => (/* binding */ setPrLabels),
+  Gp: () => (/* binding */ stripAutoDescribeSection),
+  Gg: () => (/* binding */ updatePrDescription)
 });
 
 ;// CONCATENATED MODULE: external "node:fs"
@@ -29207,6 +29215,29 @@ function requirePullRequest(eventPath = process.env.GITHUB_EVENT_PATH) {
   return assertPullRequestContext(eventPath);
 }
 
+
+;// CONCATENATED MODULE: ./scripts/lib/list-pr-files.mjs
+/**
+ * Fetch every file in a pull request diff.
+ *
+ * `pulls.listFiles` defaults to 30 items per page. Without pagination, PRs with
+ * more than 30 changed files are silently truncated — reviews miss whole files
+ * and line-map validation rejects findings on page-2+ paths.
+ *
+ * @param {ReturnType<import('@actions/github').getOctokit>} octokit
+ * @param {string} owner
+ * @param {string} repo
+ * @param {number} pullNumber
+ * @returns {Promise<Array<Record<string, unknown>>>}
+ */
+async function listPullRequestFiles(octokit, owner, repo, pullNumber) {
+  return octokit.paginate(octokit.rest.pulls.listFiles, {
+    owner,
+    repo,
+    pull_number: pullNumber,
+    per_page: 100,
+  });
+}
 
 ;// CONCATENATED MODULE: external "fs"
 const external_fs_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("fs");
@@ -33650,6 +33681,91 @@ function mapPullRequestFiles(fileList) {
 }
 
 /**
+ * Drop per-line hunk bodies; keep hunk range headers only.
+ * @param {Array<Record<string, unknown>>} files
+ */
+function slimFilesToHunkRanges(files) {
+  return files.map((file) => {
+    if (file.status === 'deleted' || !Array.isArray(file.hunks)) {
+      const entry = { path: file.path, status: file.status };
+      if (file.previous_filename) {
+        entry.previous_filename = file.previous_filename;
+      }
+      return entry;
+    }
+
+    const entry = {
+      path: file.path,
+      status: file.status,
+      hunks: file.hunks.map((hunk) => ({
+        oldStart: hunk.oldStart,
+        oldLines: hunk.oldLines,
+        newStart: hunk.newStart,
+        newLines: hunk.newLines,
+      })),
+    };
+
+    if (file.previous_filename) {
+      entry.previous_filename = file.previous_filename;
+    }
+
+    return entry;
+  });
+}
+
+/**
+ * Keep path/status (+ rename) only — no hunks.
+ * @param {Array<Record<string, unknown>>} files
+ */
+function slimFilesToPathsOnly(files) {
+  return files.map((file) => {
+    const entry = { path: file.path, status: file.status };
+    if (file.previous_filename) {
+      entry.previous_filename = file.previous_filename;
+    }
+    return entry;
+  });
+}
+
+/**
+ * Pick the richest diff payload that fits under DIFF_SIZE_LIMIT.
+ * Never fails for size alone — always returns a usable inventory.
+ *
+ * @param {Array<Record<string, unknown>>} fullFiles
+ * @param {number} [limit]
+ * @returns {{ diffMode: 'full' | 'hunk_ranges' | 'paths_only', files: Array<Record<string, unknown>>, truncated?: boolean }}
+ */
+function buildSizedDiff(fullFiles, limit = DIFF_SIZE_LIMIT) {
+  const fullOutput = { diffMode: 'full', files: fullFiles };
+  if (JSON.stringify(fullOutput).length <= limit) {
+    return fullOutput;
+  }
+
+  const hunkRangesFiles = slimFilesToHunkRanges(fullFiles);
+  const hunkRangesOutput = { diffMode: 'hunk_ranges', files: hunkRangesFiles };
+  if (JSON.stringify(hunkRangesOutput).length <= limit) {
+    return hunkRangesOutput;
+  }
+
+  const pathsOnlyFiles = slimFilesToPathsOnly(fullFiles);
+  const pathsOnlyOutput = { diffMode: 'paths_only', files: pathsOnlyFiles };
+  if (JSON.stringify(pathsOnlyOutput).length <= limit) {
+    return pathsOnlyOutput;
+  }
+
+  const truncated = [];
+  const bounded = { diffMode: 'paths_only', truncated: true, files: truncated };
+  for (const file of pathsOnlyFiles) {
+    truncated.push(file);
+    if (JSON.stringify(bounded).length > limit) {
+      truncated.pop();
+      break;
+    }
+  }
+  return bounded;
+}
+
+/**
  * @param {Array<{ path: string, status: string, hunks?: Array<{ lines: Array<{ type: string, newLine?: number }> }> }>} files
  * @returns {Map<string, Set<number>>}
  */
@@ -33675,6 +33791,7 @@ function buildLineMap(files) {
 }
 
 ;// CONCATENATED MODULE: ./scripts/lib/validate.mjs
+
 
 
 /**
@@ -33711,11 +33828,7 @@ function validateFinding(path, line, lineMap) {
  * @returns {Promise<Map<string, Set<number>>>}
  */
 async function fetchDiffLineMap(octokit, owner, repo, pullNumber) {
-  const { data: fileList } = await octokit.rest.pulls.listFiles({
-    owner,
-    repo,
-    pull_number: pullNumber,
-  });
+  const fileList = await listPullRequestFiles(octokit, owner, repo, pullNumber);
 
   const files = mapPullRequestFiles(fileList);
 
@@ -33723,6 +33836,7 @@ async function fetchDiffLineMap(octokit, owner, repo, pullNumber) {
 }
 
 ;// CONCATENATED MODULE: ./scripts/lib/operations.mjs
+
 
 
 
@@ -33737,12 +33851,33 @@ async function fetchDiffLineMap(octokit, owner, repo, pullNumber) {
  */
 async function getPrContext(deps) {
   const pr = requirePullRequest(deps.eventPath);
+  let title = typeof pr.title === 'string' ? pr.title : '';
+  let body = typeof pr.body === 'string' ? pr.body : '';
+
+  try {
+    const octokit = createClient(deps.token);
+    const { owner, repo } = parseRepo(deps.repository);
+    const { data: livePr } = await octokit.rest.pulls.get({
+      owner,
+      repo,
+      pull_number: pr.number,
+    });
+    if (typeof livePr.title === 'string') {
+      title = livePr.title;
+    }
+    body = typeof livePr.body === 'string' ? livePr.body : '';
+  } catch {
+    // Fall back to event payload.
+  }
+
   return {
     number: pr.number,
     headRef: pr.head.ref,
     baseRef: pr.base.ref,
     headSha: pr.head.sha,
     baseSha: pr.base.sha,
+    title,
+    body,
   };
 }
 
@@ -33754,23 +33889,10 @@ async function getDiff(deps) {
   const octokit = createClient(deps.token);
   const { owner, repo } = parseRepo(deps.repository);
 
-  const { data: fileList } = await octokit.rest.pulls.listFiles({
-    owner,
-    repo,
-    pull_number: pr.number,
-  });
+  const fileList = await listPullRequestFiles(octokit, owner, repo, pr.number);
 
   const files = mapPullRequestFiles(fileList);
-
-  const output = { files };
-
-  if (JSON.stringify(output).length > DIFF_SIZE_LIMIT) {
-    const err = new Error(`Diff JSON exceeds ${DIFF_SIZE_LIMIT} bytes`);
-    err.code = 'DIFF_TOO_LARGE';
-    throw err;
-  }
-
-  return output;
+  return buildSizedDiff(files);
 }
 
 /**
@@ -33812,13 +33934,46 @@ function validateFindingShape(finding, index) {
   };
 }
 
+const DEFAULT_CLEAN_SUMMARY_BODY =
+  '## bugbit: LGTM — no findings\n\nNo issues reported on this diff.';
+
 /**
  * @param {OpsDeps} deps
  * @param {unknown[]} findings
  */
 async function postReview(deps, findings) {
-  if (!Array.isArray(findings) || findings.length === 0) {
-    return { posted: [], reviewId: null };
+  if (!Array.isArray(findings)) {
+    return {
+      error: {
+        code: 'INVALID_ARGS',
+        message: 'findings must be an array',
+      },
+    };
+  }
+
+  if (findings.length === 0) {
+    if (!deps.postCleanSummary) {
+      return { posted: [], reviewId: null, cleanSummary: false };
+    }
+
+    const pr = requirePullRequest(deps.eventPath);
+    const octokit = createClient(deps.token);
+    const { owner, repo } = parseRepo(deps.repository);
+    const body =
+      typeof deps.cleanSummaryBody === 'string' && deps.cleanSummaryBody.trim()
+        ? deps.cleanSummaryBody.trim()
+        : DEFAULT_CLEAN_SUMMARY_BODY;
+
+    const { data } = await octokit.rest.pulls.createReview({
+      owner,
+      repo,
+      pull_number: pr.number,
+      commit_id: pr.head.sha,
+      event: 'COMMENT',
+      body,
+    });
+
+    return { posted: [], reviewId: data.id, cleanSummary: true };
   }
 
   const pr = requirePullRequest(deps.eventPath);
@@ -33865,7 +34020,7 @@ async function postReview(deps, findings) {
     pull_number: pr.number,
     commit_id: pr.head.sha,
     event: 'COMMENT',
-    body: 'bugbit review findings',
+    body: `bugbit: ${validFindings.length} finding(s)`,
     comments: validFindings.map((f) => ({
       path: f.path,
       line: f.line,
@@ -33926,8 +34081,289 @@ async function postInlineComment(deps, { path, line, body }) {
   };
 }
 
+/** Markers that wrap the auto-describe section so re-runs replace it without touching author text. */
+const AUTO_DESCRIBE_START = '<!-- bugbit-auto-describe:start -->';
+const AUTO_DESCRIBE_END = '<!-- bugbit-auto-describe:end -->';
+
+/**
+ * True when the PR body already contains a bugbit auto-describe block.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function hasAutoDescribeSection(text) {
+  if (!text || typeof text !== 'string') {
+    return false;
+  }
+  return text.includes(AUTO_DESCRIBE_START) && text.includes(AUTO_DESCRIBE_END);
+}
+
+/**
+ * Remove any previously written auto-describe block from a PR body.
+ * @param {string} text
+ * @returns {string}
+ */
+function stripAutoDescribeSection(text) {
+  if (!text || typeof text !== 'string') {
+    return '';
+  }
+  const pattern = new RegExp(
+    `${escapeRegExp(AUTO_DESCRIBE_START)}[\\s\\S]*?${escapeRegExp(AUTO_DESCRIBE_END)}\\s*`,
+    'g',
+  );
+  return text.replace(pattern, '').trimEnd();
+}
+
+/**
+ * Merge developer-authored PR body with a newly generated auto-describe section.
+ * Author text is preserved; prior auto-describe blocks are replaced.
+ * @param {string} existingBody
+ * @param {string} generatedBody
+ * @returns {string}
+ */
+function mergeAutoDescribeBody(existingBody, generatedBody) {
+  const authorPart = stripAutoDescribeSection(existingBody || '').trim();
+  const generated = stripAutoDescribeSection(generatedBody || '').trim();
+  if (!generated) {
+    return authorPart;
+  }
+  const block = `${AUTO_DESCRIBE_START}\n${generated}\n${AUTO_DESCRIBE_END}`;
+  if (!authorPart) {
+    return block;
+  }
+  return `${authorPart}\n\n${block}`;
+}
+
+/**
+ * @param {string} value
+ * @returns {string}
+ */
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Update the PR title and/or body.
+ * Body is merged: the developer's existing text is kept, and the generated
+ * auto-describe section is appended (or replaced on re-run).
+ * @param {OpsDeps} deps
+ * @param {{ title?: string, body: string }} input
+ */
+async function updatePrDescription(deps, { title, body }) {
+  if (!deps.autoDescribe) {
+    return {
+      error: {
+        code: 'DESCRIBE_DISABLED',
+        message: 'update_pr_description is only available during the auto-describe pass',
+      },
+    };
+  }
+
+  if (!body || typeof body !== 'string' || body.trim().length === 0) {
+    return {
+      error: {
+        code: 'INVALID_ARGS',
+        message: 'Missing required body',
+      },
+    };
+  }
+
+  const pr = requirePullRequest(deps.eventPath);
+  const octokit = createClient(deps.token);
+  const { owner, repo } = parseRepo(deps.repository);
+
+  let existingBody = typeof pr.body === 'string' ? pr.body : '';
+  try {
+    const { data: livePr } = await octokit.rest.pulls.get({
+      owner,
+      repo,
+      pull_number: pr.number,
+    });
+    existingBody = typeof livePr.body === 'string' ? livePr.body : '';
+  } catch {
+    // Fall back to event payload body.
+  }
+
+  if (hasAutoDescribeSection(existingBody)) {
+    const params = {
+      owner,
+      repo,
+      pull_number: pr.number,
+    };
+    if (title && typeof title === 'string' && title.trim().length > 0) {
+      params.title = title;
+      const { data } = await octokit.rest.pulls.update(params);
+      return { updated: true, id: data.id, skippedDescribe: true, preservedAuthorBody: true };
+    }
+    return { updated: false, skippedDescribe: true, preservedAuthorBody: true };
+  }
+
+  const mergedBody = mergeAutoDescribeBody(existingBody, body);
+
+  const params = {
+    owner,
+    repo,
+    pull_number: pr.number,
+    body: mergedBody,
+  };
+  if (title && typeof title === 'string' && title.trim().length > 0) {
+    params.title = title;
+  }
+
+  const { data } = await octokit.rest.pulls.update(params);
+  return {
+    updated: true,
+    id: data.id,
+    preservedAuthorBody: Boolean(stripAutoDescribeSection(existingBody).trim()),
+  };
+}
+
+const INFERRED_TYPE_LABELS = new Set([
+  'feature',
+  'bug-fix',
+  'enhancement',
+  'refactor',
+  'docs',
+  'chore',
+  'breaking-change',
+]);
+
+const REVIEW_EFFORT_LABEL = /^Review effort [1-5]\/5$/;
+const MAX_LABEL_NAME = 50;
+const MAX_LABELS = 20;
+
+/**
+ * Keep inferred catalog labels plus workflow-configured describe-labels.
+ * Drops arbitrary agent-invented names so prompt injection cannot create
+ * automerge / security-reviewed style labels.
+ * @param {{ describeLabels?: string[] }} deps
+ * @param {unknown} agentLabels
+ * @returns {string[]}
+ */
+function resolvePrLabels(deps, agentLabels) {
+  const configured = [];
+  if (Array.isArray(deps.describeLabels)) {
+    for (const raw of deps.describeLabels) {
+      if (typeof raw !== 'string') {
+        continue;
+      }
+      const name = raw.trim();
+      if (name && name.length <= MAX_LABEL_NAME) {
+        configured.push(name);
+      }
+    }
+  }
+
+  const inferred = [];
+  if (Array.isArray(agentLabels)) {
+    for (const raw of agentLabels) {
+      if (typeof raw !== 'string') {
+        continue;
+      }
+      const name = raw.trim();
+      if (!name || name.length > MAX_LABEL_NAME) {
+        continue;
+      }
+      if (
+        INFERRED_TYPE_LABELS.has(name) ||
+        REVIEW_EFFORT_LABEL.test(name) ||
+        configured.includes(name)
+      ) {
+        inferred.push(name);
+      }
+    }
+  }
+
+  const merged = [];
+  const seen = new Set();
+  for (const name of [...inferred, ...configured]) {
+    if (seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    merged.push(name);
+    if (merged.length >= MAX_LABELS) {
+      break;
+    }
+  }
+  return merged;
+}
+
+/**
+ * Apply a list of labels to the PR (uses the issues API, requires issues: write).
+ * Creates missing labels so inferred type / review-effort names work on first use.
+ * @param {OpsDeps} deps
+ * @param {{ labels: string[] }} input
+ */
+async function setPrLabels(deps, { labels }) {
+  if (!deps.autoDescribe) {
+    return {
+      error: {
+        code: 'DESCRIBE_DISABLED',
+        message: 'set_pr_labels is only available during the auto-describe pass',
+      },
+    };
+  }
+
+  if (!Array.isArray(labels)) {
+    return {
+      error: {
+        code: 'INVALID_ARGS',
+        message: 'labels must be a non-empty array',
+      },
+    };
+  }
+
+  const resolved = resolvePrLabels(deps, labels);
+  if (resolved.length === 0) {
+    return {
+      error: {
+        code: 'INVALID_ARGS',
+        message: 'labels must be a non-empty array',
+      },
+    };
+  }
+
+  const pr = requirePullRequest(deps.eventPath);
+  const octokit = createClient(deps.token);
+  const { owner, repo } = parseRepo(deps.repository);
+
+  for (const name of resolved) {
+    try {
+      await octokit.rest.issues.getLabel({ owner, repo, name });
+    } catch (error) {
+      const status =
+        error && typeof error === 'object' && 'status' in error ? error.status : undefined;
+      if (status !== 404) {
+        throw error;
+      }
+      await octokit.rest.issues.createLabel({
+        owner,
+        repo,
+        name,
+        color: 'ededed',
+      });
+    }
+  }
+
+  await octokit.rest.issues.addLabels({
+    owner,
+    repo,
+    issue_number: pr.number,
+    labels: resolved,
+  });
+  return { applied: resolved };
+}
+
+var __webpack_exports__AUTO_DESCRIBE_END = __webpack_exports__.Oi;
+var __webpack_exports__AUTO_DESCRIBE_START = __webpack_exports__.r$;
 var __webpack_exports__getDiff = __webpack_exports__.Gw;
 var __webpack_exports__getPrContext = __webpack_exports__.C0;
+var __webpack_exports__hasAutoDescribeSection = __webpack_exports__.cT;
+var __webpack_exports__mergeAutoDescribeBody = __webpack_exports__.Tl;
 var __webpack_exports__postInlineComment = __webpack_exports__.Zb;
 var __webpack_exports__postReview = __webpack_exports__.Xc;
-export { __webpack_exports__getDiff as getDiff, __webpack_exports__getPrContext as getPrContext, __webpack_exports__postInlineComment as postInlineComment, __webpack_exports__postReview as postReview };
+var __webpack_exports__resolvePrLabels = __webpack_exports__.er;
+var __webpack_exports__setPrLabels = __webpack_exports__.CD;
+var __webpack_exports__stripAutoDescribeSection = __webpack_exports__.Gp;
+var __webpack_exports__updatePrDescription = __webpack_exports__.Gg;
+export { __webpack_exports__AUTO_DESCRIBE_END as AUTO_DESCRIBE_END, __webpack_exports__AUTO_DESCRIBE_START as AUTO_DESCRIBE_START, __webpack_exports__getDiff as getDiff, __webpack_exports__getPrContext as getPrContext, __webpack_exports__hasAutoDescribeSection as hasAutoDescribeSection, __webpack_exports__mergeAutoDescribeBody as mergeAutoDescribeBody, __webpack_exports__postInlineComment as postInlineComment, __webpack_exports__postReview as postReview, __webpack_exports__resolvePrLabels as resolvePrLabels, __webpack_exports__setPrLabels as setPrLabels, __webpack_exports__stripAutoDescribeSection as stripAutoDescribeSection, __webpack_exports__updatePrDescription as updatePrDescription };
