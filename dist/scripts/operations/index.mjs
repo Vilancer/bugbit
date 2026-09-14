@@ -34128,6 +34128,15 @@ function escapeRegExp(value) {
  * @param {{ title?: string, body: string }} input
  */
 async function updatePrDescription(deps, { title, body }) {
+  if (!deps.autoDescribe) {
+    return {
+      error: {
+        code: 'DESCRIBE_DISABLED',
+        message: 'update_pr_description is only available during the auto-describe pass',
+      },
+    };
+  }
+
   if (!body || typeof body !== 'string' || body.trim().length === 0) {
     return {
       error: {

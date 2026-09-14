@@ -3,6 +3,10 @@ let AUTO_DESCRIBE_START: string;
 let mergeAutoDescribeBody: (existingBody: string, generatedBody: string) => string;
 let stripAutoDescribeSection: (text: string) => string;
 let hasAutoDescribeSection: (text: string) => boolean;
+let updatePrDescription: (
+  deps: { autoDescribe?: boolean },
+  input: { body: string },
+) => Promise<{ error?: { code: string; message: string } }>;
 
 beforeAll(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -12,6 +16,7 @@ beforeAll(() => {
   mergeAutoDescribeBody = mod.mergeAutoDescribeBody;
   stripAutoDescribeSection = mod.stripAutoDescribeSection;
   hasAutoDescribeSection = mod.hasAutoDescribeSection;
+  updatePrDescription = mod.updatePrDescription;
 });
 
 const generated = `### PR Type
@@ -55,5 +60,18 @@ describe('mergeAutoDescribeBody', () => {
     expect(
       hasAutoDescribeSection(`${AUTO_DESCRIBE_START}\nx\n${AUTO_DESCRIBE_END}`),
     ).toBe(true);
+  });
+});
+
+describe('updatePrDescription', () => {
+  it('rejects when auto-describe is not enabled', async () => {
+    await expect(
+      updatePrDescription({ autoDescribe: false }, { body: '### Description' }),
+    ).resolves.toEqual({
+      error: {
+        code: 'DESCRIBE_DISABLED',
+        message: 'update_pr_description is only available during the auto-describe pass',
+      },
+    });
   });
 });

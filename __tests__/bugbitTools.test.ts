@@ -29,11 +29,16 @@ export async function updatePrDescription(_deps, input) {
 }
 `;
 
-const TOOL_NAMES = [
+const REVIEW_TOOL_NAMES = [
   'get_pr_context',
   'get_diff',
   'post_review',
   'post_inline_comment',
+] as const;
+
+const DESCRIBE_TOOL_NAMES = [
+  'get_pr_context',
+  'get_diff',
   'update_pr_description',
 ] as const;
 
@@ -70,14 +75,30 @@ describe('createBugbitTools', () => {
       actionPath,
     });
 
-    expect(Object.keys(tools).sort()).toEqual([...TOOL_NAMES].sort());
+    expect(Object.keys(tools).sort()).toEqual([...REVIEW_TOOL_NAMES].sort());
 
-    for (const name of TOOL_NAMES) {
+    for (const name of REVIEW_TOOL_NAMES) {
       const tool = tools[name] as SDKCustomTool;
       expect(tool.description).toBeTruthy();
       expect(tool.inputSchema).toBeDefined();
       expect(typeof tool.execute).toBe('function');
     }
+  });
+
+  it('scopes describe-pass tools to description updates only', () => {
+    const tools = createBugbitTools(
+      {
+        githubToken: 'test-token',
+        eventPath: '/tmp/event.json',
+        repository: 'owner/repo',
+        actionPath,
+      },
+      'describe',
+    );
+
+    expect(Object.keys(tools).sort()).toEqual([...DESCRIBE_TOOL_NAMES].sort());
+    expect(tools.post_review).toBeUndefined();
+    expect(tools.post_inline_comment).toBeUndefined();
   });
 
   it('does not expose token fields in tool input schemas', () => {
@@ -88,7 +109,7 @@ describe('createBugbitTools', () => {
       actionPath,
     });
 
-    for (const name of TOOL_NAMES) {
+    for (const name of REVIEW_TOOL_NAMES) {
       const schema = tools[name].inputSchema as {
         properties?: Record<string, unknown>;
       };
@@ -143,6 +164,21 @@ describe('createBugbitTools', () => {
     expect(result).toEqual({
       error: { code: 'INVALID_PATH', message: 'path not in diff' },
     });
+  });
+
+  it('update_pr_description.execute is available on the describe pass', async () => {
+    const tools = createBugbitTools(
+      {
+        githubToken: 'test-token',
+        eventPath: '/tmp/event.json',
+        repository: 'owner/repo',
+        actionPath,
+      },
+      'describe',
+    );
+
+    const result = await tools.update_pr_description.execute({ body: '### Description' }, {});
+    expect(result).toEqual({ updated: true, body: '### Description' });
   });
 });
 

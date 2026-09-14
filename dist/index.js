@@ -856,112 +856,114 @@ function isForkPullRequest(eventPath) {
         return false;
     return pr.head?.repo?.full_name !== pr.base?.repo?.full_name;
 }
-function createBugbitTools(deps) {
+function createBugbitTools(deps, pass = 'review') {
     const toolDeps = toOpsDeps(deps);
-    return {
-        get_pr_context: {
-            description: 'Returns PR number, title, body, head/base branch names, and commit SHAs for the current pull_request event.',
-            inputSchema: {
-                type: 'object',
-                properties: {},
-                additionalProperties: false,
-            },
-            execute: async () => {
-                core.info('[bugbit] get_pr_context called');
-                const ops = await loadOps(deps.actionPath);
-                return (await ops.getPrContext(toolDeps));
-            },
+    const get_pr_context = {
+        description: 'Returns PR number, title, body, head/base branch names, and commit SHAs for the current pull_request event.',
+        inputSchema: {
+            type: 'object',
+            properties: {},
+            additionalProperties: false,
         },
-        get_diff: {
-            description: 'Returns changed files for the current PR with diffMode (full | hunk_ranges | paths_only). Prefer prefetched data; use when missing.',
-            inputSchema: {
-                type: 'object',
-                properties: {},
-                additionalProperties: false,
-            },
-            execute: async () => {
-                core.info('[bugbit] get_diff called');
-                const ops = await loadOps(deps.actionPath);
-                return (await ops.getDiff(toolDeps));
-            },
-        },
-        post_review: {
-            description: 'Posts multiple inline comments as one PR review; prefer this over repeated post_inline_comment calls. Pass an empty findings array when there are no issues (may post an LGTM summary when configured).',
-            inputSchema: {
-                type: 'object',
-                properties: {
-                    findings: {
-                        type: 'array',
-                        items: {
-                            type: 'object',
-                            properties: {
-                                mode: { type: 'string' },
-                                path: { type: 'string' },
-                                line: { type: 'number' },
-                                body: { type: 'string' },
-                            },
-                            required: ['mode', 'path', 'line', 'body'],
-                            additionalProperties: false,
-                        },
-                    },
-                },
-                required: ['findings'],
-                additionalProperties: false,
-            },
-            execute: async (args) => {
-                const findings = args.findings;
-                core.info(`[bugbit] post_review called with ${findings.length} finding(s)`);
-                const ops = await loadOps(deps.actionPath);
-                const result = (await ops.postReview(toolDeps, findings));
-                core.info('[bugbit] post_review completed');
-                return result;
-            },
-        },
-        post_inline_comment: {
-            description: 'Posts a single inline comment on a specific file and line in the PR diff.',
-            inputSchema: {
-                type: 'object',
-                properties: {
-                    path: { type: 'string' },
-                    line: { type: 'number' },
-                    body: { type: 'string' },
-                },
-                required: ['path', 'line', 'body'],
-                additionalProperties: false,
-            },
-            execute: async (args) => {
-                core.info(`[bugbit] post_inline_comment called for ${args.path}:${args.line}`);
-                const ops = await loadOps(deps.actionPath);
-                const result = await ops.postInlineComment(toolDeps, {
-                    path: args.path,
-                    line: args.line,
-                    body: args.body,
-                });
-                return result;
-            },
-        },
-        update_pr_description: {
-            description: 'Appends an auto-describe section after the developer PR body (replaces prior auto-describe on re-run). Optionally updates title. Requires pull-requests: write.',
-            inputSchema: {
-                type: 'object',
-                properties: {
-                    title: { type: 'string' },
-                    body: { type: 'string' },
-                },
-                required: ['body'],
-                additionalProperties: false,
-            },
-            execute: async (args) => {
-                core.info('[bugbit] update_pr_description called');
-                const ops = await loadOps(deps.actionPath);
-                const result = await ops.updatePrDescription(toolDeps, {
-                    body: args.body,
-                    ...(args.title ? { title: args.title } : {}),
-                });
-                return result;
-            },
+        execute: async () => {
+            core.info('[bugbit] get_pr_context called');
+            const ops = await loadOps(deps.actionPath);
+            return (await ops.getPrContext(toolDeps));
         },
     };
+    const get_diff = {
+        description: 'Returns changed files for the current PR with diffMode (full | hunk_ranges | paths_only). Prefer prefetched data; use when missing.',
+        inputSchema: {
+            type: 'object',
+            properties: {},
+            additionalProperties: false,
+        },
+        execute: async () => {
+            core.info('[bugbit] get_diff called');
+            const ops = await loadOps(deps.actionPath);
+            return (await ops.getDiff(toolDeps));
+        },
+    };
+    const post_review = {
+        description: 'Posts multiple inline comments as one PR review; prefer this over repeated post_inline_comment calls. Pass an empty findings array when there are no issues (may post an LGTM summary when configured).',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                findings: {
+                    type: 'array',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            mode: { type: 'string' },
+                            path: { type: 'string' },
+                            line: { type: 'number' },
+                            body: { type: 'string' },
+                        },
+                        required: ['mode', 'path', 'line', 'body'],
+                        additionalProperties: false,
+                    },
+                },
+            },
+            required: ['findings'],
+            additionalProperties: false,
+        },
+        execute: async (args) => {
+            const findings = args.findings;
+            core.info(`[bugbit] post_review called with ${findings.length} finding(s)`);
+            const ops = await loadOps(deps.actionPath);
+            const result = (await ops.postReview(toolDeps, findings));
+            core.info('[bugbit] post_review completed');
+            return result;
+        },
+    };
+    const post_inline_comment = {
+        description: 'Posts a single inline comment on a specific file and line in the PR diff.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                path: { type: 'string' },
+                line: { type: 'number' },
+                body: { type: 'string' },
+            },
+            required: ['path', 'line', 'body'],
+            additionalProperties: false,
+        },
+        execute: async (args) => {
+            core.info(`[bugbit] post_inline_comment called for ${args.path}:${args.line}`);
+            const ops = await loadOps(deps.actionPath);
+            const result = await ops.postInlineComment(toolDeps, {
+                path: args.path,
+                line: args.line,
+                body: args.body,
+            });
+            return result;
+        },
+    };
+    const update_pr_description = {
+        description: 'Appends an auto-describe section after the developer PR body (replaces prior auto-describe on re-run). Optionally updates title. Requires pull-requests: write.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                title: { type: 'string' },
+                body: { type: 'string' },
+            },
+            required: ['body'],
+            additionalProperties: false,
+        },
+        execute: async (args) => {
+            core.info('[bugbit] update_pr_description called');
+            const ops = await loadOps(deps.actionPath);
+            const result = await ops.updatePrDescription(toolDeps, {
+                body: args.body,
+                ...(args.title ? { title: args.title } : {}),
+            });
+            return result;
+        },
+    };
+    if (pass === 'describe') {
+        return { get_pr_context, get_diff, update_pr_description };
+    }
+    return { get_pr_context, get_diff, post_review, post_inline_comment };
 }
 
 
@@ -1083,11 +1085,19 @@ async function run() {
         (0, tools_1.copyPermissionsToWorkspace)(actionPath, cwd);
         const promptsDir = path.join(actionPath, 'prompts');
         const prefetched = await (0, tools_1.prefetchPrData)(toolDeps);
-        const customTools = (0, tools_1.createBugbitTools)(toolDeps);
         const reviewModes = (0, reviewModes_1.parseReviewModes)(modesInput);
         const alreadyDescribed = hasPrefetchedAutoDescribe(prefetched);
         const runDescribe = autoDescribe && !alreadyDescribed;
         const runReview = reviewModes.length > 0;
+        if (runReview) {
+            try {
+                (0, reviewModes_1.validateReviewModes)(reviewModes);
+            }
+            catch (error) {
+                core.setFailed(error instanceof Error ? error.message : String(error));
+                return;
+            }
+        }
         if (autoDescribe && alreadyDescribed) {
             core.info('Skipping auto-describe: PR body already has a bugbit auto-describe section. Review will still run.');
         }
@@ -1096,15 +1106,15 @@ async function run() {
                 'Set auto-describe to true and/or provide at least one review-modes value.');
             return;
         }
-        async function runPass(label, prompt, saveLog) {
+        async function runPass(label, prompt, tools, saveLog) {
             core.info(`Starting Cursor agent (model: ${model}, pass: ${label})`);
-            const result = await (0, cursorAgent_1.runAgent)(apiKey, model, prompt, cwd, customTools, {
+            const result = await (0, cursorAgent_1.runAgent)(apiKey, model, prompt, cwd, tools, {
                 saveStreamLog: saveLog,
             });
             core.info(`${label} pass completed: run ${result.runId}`);
             return result;
         }
-        async function uploadStreamLog(streamLogPath, runId) {
+        async function uploadStreamLog(streamLogPath, runId, failOnError) {
             if (!saveStreamLog || !streamLogPath || !runId) {
                 return;
             }
@@ -1118,19 +1128,23 @@ async function run() {
                 core.info(`Uploaded stream log artifact "${artifactName}" (id: ${uploadResponse.id ?? 'unknown'})`);
             }
             catch (error) {
-                core.setFailed((0, artifactUpload_1.artifactUploadErrorMessage)(error));
-                throw error;
+                const message = (0, artifactUpload_1.artifactUploadErrorMessage)(error);
+                if (failOnError) {
+                    core.setFailed(message);
+                    throw error;
+                }
+                core.warning(`Stream log upload failed; continuing remaining passes: ${message}`);
             }
         }
         if (runDescribe) {
             const { prompt: describePrompt } = (0, reviewModes_1.buildDescribePrompt)(promptsDir, actionPath, prefetched);
-            const describeRun = await runPass('describe', describePrompt, saveStreamLog);
-            await uploadStreamLog(describeRun.streamLogPath, describeRun.runId);
+            const describeRun = await runPass('describe', describePrompt, (0, tools_1.createBugbitTools)(toolDeps, 'describe'), saveStreamLog);
+            await uploadStreamLog(describeRun.streamLogPath, describeRun.runId, !runReview);
         }
         if (runReview) {
             const { prompt: reviewPrompt } = (0, reviewModes_1.buildSkillPrompt)(reviewModes.join(','), promptsDir, actionPath, prefetched);
-            const reviewRun = await runPass('review', reviewPrompt, saveStreamLog);
-            await uploadStreamLog(reviewRun.streamLogPath, reviewRun.runId);
+            const reviewRun = await runPass('review', reviewPrompt, (0, tools_1.createBugbitTools)(toolDeps, 'review'), saveStreamLog);
+            await uploadStreamLog(reviewRun.streamLogPath, reviewRun.runId, true);
         }
     }
     catch (error) {

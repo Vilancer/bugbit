@@ -12,6 +12,7 @@ import {
   buildDescribePrompt,
   buildSkillPrompt,
   parseReviewModes,
+  validateReviewModes,
 } from './prompts/reviewModes';
 import {
   checkReviewPermissions,
@@ -111,12 +112,20 @@ async function run(): Promise<void> {
     const promptsDir = path.join(actionPath, 'prompts');
 
     const prefetched = await prefetchPrData(toolDeps);
-    const customTools = createBugbitTools(toolDeps);
 
     const reviewModes = parseReviewModes(modesInput);
     const alreadyDescribed = hasPrefetchedAutoDescribe(prefetched);
     const runDescribe = autoDescribe && !alreadyDescribed;
     const runReview = reviewModes.length > 0;
+
+    if (runReview) {
+      try {
+        validateReviewModes(reviewModes);
+      } catch (error) {
+        core.setFailed(error instanceof Error ? error.message : String(error));
+        return;
+      }
+    }
 
     if (autoDescribe && alreadyDescribed) {
       core.info(
@@ -135,17 +144,22 @@ async function run(): Promise<void> {
     async function runPass(
       label: string,
       prompt: string,
+      tools: ReturnType<typeof createBugbitTools>,
       saveLog: boolean,
     ): Promise<{ runId: string; streamLogPath?: string }> {
       core.info(`Starting Cursor agent (model: ${model}, pass: ${label})`);
-      const result = await runAgent(apiKey, model, prompt, cwd, customTools, {
+      const result = await runAgent(apiKey, model, prompt, cwd, tools, {
         saveStreamLog: saveLog,
       });
       core.info(`${label} pass completed: run ${result.runId}`);
       return result;
     }
 
-    async function uploadStreamLog(streamLogPath?: string, runId?: string): Promise<void> {
+    async function uploadStreamLog(
+      streamLogPath: string | undefined,
+      runId: string | undefined,
+      failOnError: boolean,
+    ): Promise<void> {
       if (!saveStreamLog || !streamLogPath || !runId) {
         return;
       }
@@ -160,8 +174,12 @@ async function run(): Promise<void> {
           `Uploaded stream log artifact "${artifactName}" (id: ${uploadResponse.id ?? 'unknown'})`,
         );
       } catch (error) {
-        core.setFailed(artifactUploadErrorMessage(error));
-        throw error;
+        const message = artifactUploadErrorMessage(error);
+        if (failOnError) {
+          core.setFailed(message);
+          throw error;
+        }
+        core.warning(`Stream log upload failed; continuing remaining passes: ${message}`);
       }
     }
 
@@ -171,8 +189,13 @@ async function run(): Promise<void> {
         actionPath,
         prefetched,
       );
-      const describeRun = await runPass('describe', describePrompt, saveStreamLog);
-      await uploadStreamLog(describeRun.streamLogPath, describeRun.runId);
+      const describeRun = await runPass(
+        'describe',
+        describePrompt,
+        createBugbitTools(toolDeps, 'describe'),
+        saveStreamLog,
+      );
+      await uploadStreamLog(describeRun.streamLogPath, describeRun.runId, !runReview);
     }
 
     if (runReview) {
@@ -182,8 +205,13 @@ async function run(): Promise<void> {
         actionPath,
         prefetched,
       );
-      const reviewRun = await runPass('review', reviewPrompt, saveStreamLog);
-      await uploadStreamLog(reviewRun.streamLogPath, reviewRun.runId);
+      const reviewRun = await runPass(
+        'review',
+        reviewPrompt,
+        createBugbitTools(toolDeps, 'review'),
+        saveStreamLog,
+      );
+      await uploadStreamLog(reviewRun.streamLogPath, reviewRun.runId, true);
     }
   } catch (error) {
     core.setFailed(error instanceof Error ? error.message : String(error));
