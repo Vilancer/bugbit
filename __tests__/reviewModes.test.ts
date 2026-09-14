@@ -27,6 +27,23 @@ describe('parseReviewModes', () => {
       'security-review',
     ]);
   });
+
+  it('canonicalizes Cursor skill aliases', () => {
+    expect(parseReviewModes('review-bugbot, review-security, simplify')).toEqual([
+      'code-review',
+      'security-review',
+      'simplify',
+    ]);
+  });
+
+  it('deduplicates aliases that map to the same mode', () => {
+    expect(parseReviewModes('review-bugbot, bugbot, code-review')).toEqual(['code-review']);
+    expect(parseReviewModes('security-review, review-security')).toEqual(['security-review']);
+  });
+
+  it('does not treat Object.prototype keys as aliases', () => {
+    expect(parseReviewModes('constructor')).toEqual(['constructor']);
+  });
 });
 
 describe('validateReviewModes', () => {
@@ -49,9 +66,19 @@ describe('buildSkillPrompt', () => {
     const { prompt, modes } = buildSkillPrompt('code-review, security-review', promptsDir, actionPath);
 
     expect(modes).toEqual(['code-review', 'security-review']);
-    expect(prompt.startsWith('/code-review\n/review-security\n\n')).toBe(true);
+    expect(prompt.startsWith('/review-bugbot\n/review-security\n\n')).toBe(true);
     expect(prompt).toContain(actionPath);
     expect(prompt).toContain('get_pr_context tool');
+  });
+
+  it('maps review-bugbot aliases to code-review and /review-bugbot', () => {
+    const promptsDir = makePromptsDir();
+    const actionPath = path.dirname(promptsDir);
+
+    const { prompt, modes } = buildSkillPrompt('review-bugbot, bugbot', promptsDir, actionPath);
+
+    expect(modes).toEqual(['code-review']);
+    expect(prompt.startsWith('/review-bugbot\n\n')).toBe(true);
   });
 
   it('injects /simplify for simplify mode', () => {

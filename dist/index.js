@@ -800,12 +800,11 @@ function toOpsDeps(deps) {
         token: deps.githubToken,
         eventPath: deps.eventPath,
         repository: deps.repository,
+        postCleanSummary: deps.postCleanSummary,
+        cleanSummaryBody: deps.cleanSummaryBody,
+        autoDescribe: deps.autoDescribe,
+        describeLabels: deps.describeLabels,
     };
-}
-function isDiffTooLarge(error) {
-    return (error instanceof Error &&
-        'code' in error &&
-        error.code === 'DIFF_TOO_LARGE');
 }
 async function checkReviewPermissions(deps) {
     try {
@@ -842,24 +841,12 @@ async function prefetchPrData(deps) {
     const toolDeps = toOpsDeps(deps);
     core.info('Prefetching PR context and diff…');
     const context = await ops.getPrContext(toolDeps);
-    try {
-        const diff = await ops.getDiff(toolDeps);
-        const fileCount = Array.isArray(diff?.files)
-            ? diff.files.length
-            : 0;
-        core.info(`Prefetched diff: ${fileCount} changed file(s)`);
-        return { context, diff };
-    }
-    catch (error) {
-        if (isDiffTooLarge(error)) {
-            core.warning(`Diff too large to prefetch: ${error.message}; agent must call get_diff`);
-            return {
-                context,
-                diffError: { code: error.code, message: error.message },
-            };
-        }
-        throw error;
-    }
+    const diff = await ops.getDiff(toolDeps);
+    const typedDiff = diff;
+    const fileCount = Array.isArray(typedDiff.files) ? typedDiff.files.length : 0;
+    const diffMode = typeof typedDiff.diffMode === 'string' ? typedDiff.diffMode : 'full';
+    core.info(`Prefetched diff: ${fileCount} changed file(s) (diffMode=${diffMode})`);
+    return { context, diff };
 }
 function isForkPullRequest(eventPath) {
     if (!eventPath)
@@ -870,99 +857,136 @@ function isForkPullRequest(eventPath) {
         return false;
     return pr.head?.repo?.full_name !== pr.base?.repo?.full_name;
 }
-function createBugbitTools(deps) {
+function createBugbitTools(deps, pass = 'review') {
     const toolDeps = toOpsDeps(deps);
-    return {
-        get_pr_context: {
-            description: 'Returns PR number, head/base branch names, and commit SHAs for the current pull_request event.',
-            inputSchema: {
-                type: 'object',
-                properties: {},
-                additionalProperties: false,
-            },
-            execute: async () => {
-                core.info('[bugbit] get_pr_context called');
-                const ops = await loadOps(deps.actionPath);
-                return (await ops.getPrContext(toolDeps));
-            },
+    const get_pr_context = {
+        description: 'Returns PR number, title, body, head/base branch names, and commit SHAs for the current pull_request event.',
+        inputSchema: {
+            type: 'object',
+            properties: {},
+            additionalProperties: false,
         },
-        get_diff: {
-            description: 'Returns changed files and parsed diff hunks for the current PR; use as the review scope.',
-            inputSchema: {
-                type: 'object',
-                properties: {},
-                additionalProperties: false,
-            },
-            execute: async () => {
-                core.info('[bugbit] get_diff called');
-                try {
-                    const ops = await loadOps(deps.actionPath);
-                    return (await ops.getDiff(toolDeps));
-                }
-                catch (error) {
-                    if (isDiffTooLarge(error)) {
-                        return { error: { code: error.code, message: error.message } };
-                    }
-                    throw error;
-                }
-            },
-        },
-        post_review: {
-            description: 'Posts multiple inline comments as one PR review; prefer this over repeated post_inline_comment calls.',
-            inputSchema: {
-                type: 'object',
-                properties: {
-                    findings: {
-                        type: 'array',
-                        items: {
-                            type: 'object',
-                            properties: {
-                                mode: { type: 'string' },
-                                path: { type: 'string' },
-                                line: { type: 'number' },
-                                body: { type: 'string' },
-                            },
-                            required: ['mode', 'path', 'line', 'body'],
-                            additionalProperties: false,
-                        },
-                    },
-                },
-                required: ['findings'],
-                additionalProperties: false,
-            },
-            execute: async (args) => {
-                const findings = args.findings;
-                core.info(`[bugbit] post_review called with ${findings.length} finding(s)`);
-                const ops = await loadOps(deps.actionPath);
-                const result = (await ops.postReview(toolDeps, findings));
-                core.info('[bugbit] post_review completed');
-                return result;
-            },
-        },
-        post_inline_comment: {
-            description: 'Posts a single inline comment on a specific file and line in the PR diff.',
-            inputSchema: {
-                type: 'object',
-                properties: {
-                    path: { type: 'string' },
-                    line: { type: 'number' },
-                    body: { type: 'string' },
-                },
-                required: ['path', 'line', 'body'],
-                additionalProperties: false,
-            },
-            execute: async (args) => {
-                core.info(`[bugbit] post_inline_comment called for ${args.path}:${args.line}`);
-                const ops = await loadOps(deps.actionPath);
-                const result = await ops.postInlineComment(toolDeps, {
-                    path: args.path,
-                    line: args.line,
-                    body: args.body,
-                });
-                return result;
-            },
+        execute: async () => {
+            core.info('[bugbit] get_pr_context called');
+            const ops = await loadOps(deps.actionPath);
+            return (await ops.getPrContext(toolDeps));
         },
     };
+    const set_pr_labels = {
+        description: 'Applies labels to the PR (issues API). Creates missing labels. Requires issues: write permission.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                labels: {
+                    type: 'array',
+                    items: { type: 'string' },
+                },
+            },
+            required: ['labels'],
+            additionalProperties: false,
+        },
+        execute: async (args) => {
+            core.info(`[bugbit] set_pr_labels called with ${args.labels.length} label(s)`);
+            const ops = await loadOps(deps.actionPath);
+            const result = await ops.setPrLabels(toolDeps, {
+                labels: args.labels,
+            });
+            return result;
+        },
+    };
+    const get_diff = {
+        description: 'Returns changed files for the current PR with diffMode (full | hunk_ranges | paths_only). Prefer prefetched data; use when missing.',
+        inputSchema: {
+            type: 'object',
+            properties: {},
+            additionalProperties: false,
+        },
+        execute: async () => {
+            core.info('[bugbit] get_diff called');
+            const ops = await loadOps(deps.actionPath);
+            return (await ops.getDiff(toolDeps));
+        },
+    };
+    const post_review = {
+        description: 'Posts multiple inline comments as one PR review; prefer this over repeated post_inline_comment calls. Pass an empty findings array when there are no issues (may post an LGTM summary when configured).',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                findings: {
+                    type: 'array',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            mode: { type: 'string' },
+                            path: { type: 'string' },
+                            line: { type: 'number' },
+                            body: { type: 'string' },
+                        },
+                        required: ['mode', 'path', 'line', 'body'],
+                        additionalProperties: false,
+                    },
+                },
+            },
+            required: ['findings'],
+            additionalProperties: false,
+        },
+        execute: async (args) => {
+            const findings = args.findings;
+            core.info(`[bugbit] post_review called with ${findings.length} finding(s)`);
+            const ops = await loadOps(deps.actionPath);
+            const result = (await ops.postReview(toolDeps, findings));
+            core.info('[bugbit] post_review completed');
+            return result;
+        },
+    };
+    const post_inline_comment = {
+        description: 'Posts a single inline comment on a specific file and line in the PR diff.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                path: { type: 'string' },
+                line: { type: 'number' },
+                body: { type: 'string' },
+            },
+            required: ['path', 'line', 'body'],
+            additionalProperties: false,
+        },
+        execute: async (args) => {
+            core.info(`[bugbit] post_inline_comment called for ${args.path}:${args.line}`);
+            const ops = await loadOps(deps.actionPath);
+            const result = await ops.postInlineComment(toolDeps, {
+                path: args.path,
+                line: args.line,
+                body: args.body,
+            });
+            return result;
+        },
+    };
+    const update_pr_description = {
+        description: 'Appends an auto-describe section after the developer PR body (replaces prior auto-describe on re-run). Optionally updates title. Requires pull-requests: write.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                title: { type: 'string' },
+                body: { type: 'string' },
+            },
+            required: ['body'],
+            additionalProperties: false,
+        },
+        execute: async (args) => {
+            core.info('[bugbit] update_pr_description called');
+            const ops = await loadOps(deps.actionPath);
+            const result = await ops.updatePrDescription(toolDeps, {
+                body: args.body,
+                ...(args.title ? { title: args.title } : {}),
+            });
+            return result;
+        },
+    };
+    if (pass === 'describe') {
+        return { get_pr_context, get_diff, update_pr_description, set_pr_labels };
+    }
+    return { get_pr_context, get_diff, post_review, post_inline_comment };
 }
 
 
@@ -1017,6 +1041,19 @@ const reviewModes_1 = __nccwpck_require__(42263);
 const tools_1 = __nccwpck_require__(6900);
 const resolveEvent_1 = __nccwpck_require__(95714);
 const sdkBootstrap_1 = __nccwpck_require__(88500);
+const AUTO_DESCRIBE_START = '<!-- bugbit-auto-describe:start -->';
+const AUTO_DESCRIBE_END = '<!-- bugbit-auto-describe:end -->';
+function hasPrefetchedAutoDescribe(prefetched) {
+    const context = prefetched.context;
+    if (!context || typeof context !== 'object') {
+        return false;
+    }
+    const body = context.body;
+    if (typeof body !== 'string') {
+        return false;
+    }
+    return body.includes(AUTO_DESCRIBE_START) && body.includes(AUTO_DESCRIBE_END);
+}
 async function run() {
     try {
         (0, sdkBootstrap_1.bootstrapRipgrep)();
@@ -1028,6 +1065,19 @@ async function run() {
         const model = core.getInput('model') || 'composer-2.5';
         const modesInput = core.getInput('review-modes') || 'code-review';
         const saveStreamLog = core.getBooleanInput('save-stream-log');
+        const postCleanSummaryInput = core.getInput('post-clean-summary');
+        const postCleanSummary = postCleanSummaryInput === '' ? true : core.getBooleanInput('post-clean-summary');
+        const cleanSummaryBody = core.getInput('clean-summary-body') ||
+            '## bugbit: LGTM — no findings\n\nNo issues reported on this diff.';
+        const autoDescribe = (core.getInput('auto-describe') || 'false').toString().toLowerCase() === 'true';
+        const describeLabelsRaw = (core.getInput('describe-labels') || '').trim();
+        const describeLabels = describeLabelsRaw
+            .split(',')
+            .map((label) => label.trim())
+            .filter(Boolean);
+        if (autoDescribe) {
+            core.warning('auto-describe infers PR labels — consumer job must include permissions: issues: write and pull-requests: write');
+        }
         const prNumber = core.getInput('pr-number');
         const rawEventPath = process.env.GITHUB_EVENT_PATH ?? '';
         const repository = process.env.GITHUB_REPOSITORY ?? '';
@@ -1049,6 +1099,10 @@ async function run() {
             eventPath,
             repository,
             actionPath,
+            postCleanSummary,
+            cleanSummaryBody,
+            autoDescribe,
+            describeLabels,
         };
         if (saveStreamLog) {
             core.info('save-stream-log enabled — consumer workflow must include actions: write');
@@ -1060,15 +1114,42 @@ async function run() {
             core.setFailed(error instanceof Error ? error.message : String(error));
             return;
         }
-        // permissions.json is best-effort shell policy; custom tools are the trust boundary for PR ops.
         (0, tools_1.copyPermissionsToWorkspace)(actionPath, cwd);
         const promptsDir = path.join(actionPath, 'prompts');
         const prefetched = await (0, tools_1.prefetchPrData)(toolDeps);
-        const { prompt, modes } = (0, reviewModes_1.buildSkillPrompt)(modesInput, promptsDir, actionPath, prefetched);
-        const customTools = (0, tools_1.createBugbitTools)(toolDeps);
-        core.info(`Starting Cursor agent (model: ${model}, modes: ${modes.join(', ')})`);
-        const { runId, streamLogPath } = await (0, cursorAgent_1.runAgent)(apiKey, model, prompt, cwd, customTools, { saveStreamLog });
-        if (saveStreamLog && streamLogPath) {
+        const reviewModes = (0, reviewModes_1.parseReviewModes)(modesInput);
+        const alreadyDescribed = hasPrefetchedAutoDescribe(prefetched);
+        const runDescribe = autoDescribe && !alreadyDescribed;
+        const runReview = reviewModes.length > 0;
+        if (runReview) {
+            try {
+                (0, reviewModes_1.validateReviewModes)(reviewModes);
+            }
+            catch (error) {
+                core.setFailed(error instanceof Error ? error.message : String(error));
+                return;
+            }
+        }
+        if (autoDescribe && alreadyDescribed) {
+            core.info('Skipping auto-describe: PR body already has a bugbit auto-describe section. Review will still run.');
+        }
+        if (!runDescribe && !runReview) {
+            core.setFailed('bugbit has nothing to do: auto-describe is false and review-modes is empty. ' +
+                'Set auto-describe to true and/or provide at least one review-modes value.');
+            return;
+        }
+        async function runPass(label, prompt, tools, saveLog) {
+            core.info(`Starting Cursor agent (model: ${model}, pass: ${label})`);
+            const result = await (0, cursorAgent_1.runAgent)(apiKey, model, prompt, cwd, tools, {
+                saveStreamLog: saveLog,
+            });
+            core.info(`${label} pass completed: run ${result.runId}`);
+            return result;
+        }
+        async function uploadStreamLog(streamLogPath, runId, failOnError) {
+            if (!saveStreamLog || !streamLogPath || !runId) {
+                return;
+            }
             try {
                 const artifactName = (0, artifactUpload_1.streamLogArtifactName)({
                     agentRunId: runId,
@@ -1079,9 +1160,23 @@ async function run() {
                 core.info(`Uploaded stream log artifact "${artifactName}" (id: ${uploadResponse.id ?? 'unknown'})`);
             }
             catch (error) {
-                core.setFailed((0, artifactUpload_1.artifactUploadErrorMessage)(error));
-                return;
+                const message = (0, artifactUpload_1.artifactUploadErrorMessage)(error);
+                if (failOnError) {
+                    core.setFailed(message);
+                    throw error;
+                }
+                core.warning(`Stream log upload failed; continuing remaining passes: ${message}`);
             }
+        }
+        if (runDescribe) {
+            const { prompt: describePrompt } = (0, reviewModes_1.buildDescribePrompt)(promptsDir, actionPath, prefetched, describeLabels);
+            const describeRun = await runPass('describe', describePrompt, (0, tools_1.createBugbitTools)(toolDeps, 'describe'), saveStreamLog);
+            await uploadStreamLog(describeRun.streamLogPath, describeRun.runId, !runReview);
+        }
+        if (runReview) {
+            const { prompt: reviewPrompt } = (0, reviewModes_1.buildSkillPrompt)(reviewModes.join(','), promptsDir, actionPath, prefetched);
+            const reviewRun = await runPass('review', reviewPrompt, (0, tools_1.createBugbitTools)(toolDeps, 'review'), saveStreamLog);
+            await uploadStreamLog(reviewRun.streamLogPath, reviewRun.runId, true);
         }
     }
     catch (error) {
@@ -1136,27 +1231,51 @@ exports.SKILL_BY_MODE = exports.ALLOWED_MODES = void 0;
 exports.parseReviewModes = parseReviewModes;
 exports.validateReviewModes = validateReviewModes;
 exports.buildSkillPrompt = buildSkillPrompt;
+exports.buildDescribePrompt = buildDescribePrompt;
 const fs = __importStar(__nccwpck_require__(79896));
 const path = __importStar(__nccwpck_require__(16928));
 exports.ALLOWED_MODES = ['code-review', 'security-review', 'simplify'];
 exports.SKILL_BY_MODE = {
-    'code-review': '/code-review',
+    'code-review': '/review-bugbot',
     'security-review': '/review-security',
     simplify: '/simplify',
 };
+const MODE_ALIASES = {
+    'code-review': 'code-review',
+    'review-bugbot': 'code-review',
+    bugbot: 'code-review',
+    'security-review': 'security-review',
+    'review-security': 'security-review',
+    simplify: 'simplify',
+};
+const ALLOWED_MODE_LIST = 'code-review, security-review, simplify (aliases: review-bugbot, bugbot, review-security)';
+function canonicalizeMode(mode) {
+    return Object.hasOwn(MODE_ALIASES, mode) ? MODE_ALIASES[mode] : mode;
+}
 function parseReviewModes(input) {
-    return input
-        .split(',')
-        .map((mode) => mode.trim())
-        .filter(Boolean);
+    const seen = new Set();
+    const modes = [];
+    for (const raw of input.split(',')) {
+        const mode = raw.trim();
+        if (!mode) {
+            continue;
+        }
+        const canonical = canonicalizeMode(mode);
+        if (seen.has(canonical)) {
+            continue;
+        }
+        seen.add(canonical);
+        modes.push(canonical);
+    }
+    return modes;
 }
 function validateReviewModes(modes) {
     if (modes.length === 0) {
-        throw new Error('review-modes must include at least one mode. Allowed: code-review, security-review, simplify');
+        throw new Error(`review-modes must include at least one mode. Allowed: ${ALLOWED_MODE_LIST}`);
     }
     for (const mode of modes) {
         if (!exports.ALLOWED_MODES.includes(mode)) {
-            throw new Error(`Unknown review mode: ${mode}. Allowed: code-review, security-review, simplify`);
+            throw new Error(`Unknown review mode: ${mode}. Allowed: ${ALLOWED_MODE_LIST}`);
         }
     }
 }
@@ -1172,8 +1291,11 @@ function buildPrefetchedSection(prefetched) {
     const lines = [
         '<prefetched_pr_data>',
         'PR context and diff are preloaded below. Treat this as the authoritative review scope.',
+        'Use title and body as author intent; prefer high-impact findings over micro-nits.',
+        'When diffMode is hunk_ranges or paths_only, read files for targeted context; still scope comments to changed paths/lines.',
         'Do not spawn task subagents to discover changed files.',
         'You MUST call post_review before finishing (use an empty findings array if no issues).',
+        'On large diffs, cover multiple risk areas in one batch.',
         JSON.stringify(prefetched, null, 2),
         '</prefetched_pr_data>',
     ];
@@ -1189,6 +1311,37 @@ function buildSkillPrompt(modesInput, promptsDir, actionPath, prefetched) {
     return {
         prompt: `${skillLines}\n\n${systemPrompt}${buildPrefetchedSection(prefetched)}`,
         modes,
+    };
+}
+function loadDescribePrompt(promptsDir, actionPath) {
+    const describePath = path.join(promptsDir, 'describe.md');
+    const template = fs.readFileSync(describePath, 'utf-8');
+    return template.replaceAll('{{GITHUB_ACTION_PATH}}', actionPath);
+}
+function buildDescribePrefetchedSection(prefetched) {
+    if (!prefetched) {
+        return '';
+    }
+    const lines = [
+        '<prefetched_pr_data>',
+        'PR context and diff are preloaded below. Treat this as the authoritative scope for the description.',
+        'Use title and existing body as author intent; do not contradict the stated objective.',
+        'Pass ONLY the auto-describe section to update_pr_description — never rewrite or include the author body; the tool appends after it.',
+        'When diffMode is hunk_ranges or paths_only, use file paths and diff stats to build the File Walkthrough; read files only if needed.',
+        'Do NOT call post_review in describe mode. Do NOT spawn subagents.',
+        'You MUST call update_pr_description before finishing. Then call set_pr_labels with inferred type + review-effort labels.',
+        JSON.stringify(prefetched, null, 2),
+        '</prefetched_pr_data>',
+    ];
+    return `\n\n${lines.join('\n')}`;
+}
+function buildDescribePrompt(promptsDir, actionPath, prefetched, labels) {
+    const describeTemplate = loadDescribePrompt(promptsDir, actionPath);
+    const configured = labels && labels.length > 0
+        ? `\n\n<configured_labels>\nAlso apply these labels (in addition to inferred type and review-effort): ${labels.join(', ')}\n</configured_labels>`
+        : '';
+    return {
+        prompt: `${describeTemplate}${buildDescribePrefetchedSection(prefetched)}${configured}`,
     };
 }
 

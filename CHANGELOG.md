@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] - 2026-09-11
+
+### Changed
+
+- `code-review` mode now invokes Cursor `/review-bugbot` (aliases: `review-bugbot`, `bugbot`). `/review-security` and `/simplify` are unchanged. The GHA overlay still forbids launching IDE review subagents.
+
+### Fixed
+
+- Paginate `pulls.listFiles` (100 files per page) when prefetching the PR diff and building the comment line map. GitHub returns 30 files per page by default; PRs with more than 30 changed files were silently truncated.
+
+### Added
+
+- Prefetched PR context now includes `title` and `body`.
+- Progressive diff slim when serialized patch JSON exceeds 1MB: `diffMode` is `full`, then `hunk_ranges`, then `paths_only`. Large PRs always get a file inventory instead of `DIFF_TOO_LARGE`.
+- `post-clean-summary` input (default `true`): empty `post_review` findings post a visible LGTM COMMENT review instead of staying silent. `clean-summary-body` customizes that review.
+- `auto-describe` input (default `false`): optional second agent pass that appends a structured PR description after the author body (once per PR; skipped when markers already exist). Ported from [JuicyBurger/bugbit](https://github.com/JuicyBurger/bugbit).
+- Describe pass infers PR type and review-effort labels, creates missing GitHub labels, and applies optional `describe-labels`. Requires `issues: write`.
+
 ## [1.1.1] - 2026-07-06
 
 ### Fixed
