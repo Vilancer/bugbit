@@ -7,6 +7,10 @@ let updatePrDescription: (
   deps: { autoDescribe?: boolean },
   input: { body: string },
 ) => Promise<{ error?: { code: string; message: string } }>;
+let postReview: (
+  deps: unknown,
+  findings: unknown,
+) => Promise<{ error?: { code: string; message: string } }>;
 
 beforeAll(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -17,6 +21,7 @@ beforeAll(() => {
   stripAutoDescribeSection = mod.stripAutoDescribeSection;
   hasAutoDescribeSection = mod.hasAutoDescribeSection;
   updatePrDescription = mod.updatePrDescription;
+  postReview = mod.postReview;
 });
 
 const generated = `### PR Type
@@ -71,6 +76,17 @@ describe('updatePrDescription', () => {
       error: {
         code: 'DESCRIBE_DISABLED',
         message: 'update_pr_description is only available during the auto-describe pass',
+      },
+    });
+  });
+});
+
+describe('postReview', () => {
+  it('rejects non-array findings without posting a clean summary', async () => {
+    await expect(postReview({ postCleanSummary: true }, null)).resolves.toEqual({
+      error: {
+        code: 'INVALID_ARGS',
+        message: 'findings must be an array',
       },
     });
   });

@@ -81,7 +81,8 @@ jobs:
     model: composer-2.5
 
     # Comma-separated review modes: code-review, security-review, simplify
-    # (code-review invokes /review-bugbot; aliases: review-bugbot, bugbot, review-security)
+    # (code-review invokes /review-bugbot; aliases: review-bugbot, bugbot.
+    #  security-review alias: review-security)
     # Default: code-review
     review-modes: code-review
 
@@ -104,7 +105,9 @@ jobs:
 
     # When true, run an additional agent pass first that updates the PR
     # description with: type, summary bullets, mermaid diagram, file
-    # walkthrough, and test plan. Needs pull-requests: write permission.
+    # walkthrough, and test plan. Needs pull-requests: write and
+    # issues: write (inferred and describe-labels use the issues API).
+    # Set review-modes to an empty string for describe-only.
     # auto-describe: true
 
     # Comma-separated labels to apply after the describe pass.
@@ -276,7 +279,7 @@ GitHub itself still caps that endpoint at **3,000 files** per pull request. Beyo
 
 ### Large diffs
 
-Prefetched / `get_diff` payloads are capped at ~1MB of JSON. When the full parsed hunk body would exceed that, bugbit progressively slims the payload (`diffMode`: `full` → `hunk_ranges` → `paths_only`) so the agent still receives every changed path. For slim modes, the agent reads files for targeted context and still anchors comments via the full line map.
+Prefetched / `get_diff` payloads are capped at ~1MB of JSON. When the full parsed hunk body would exceed that, bugbit progressively slims the payload (`diffMode`: `full` → `hunk_ranges` → `paths_only`) so the agent still receives changed paths. For slim modes, the agent reads files for targeted context. Inline comments are still validated against the full GitHub line map (not the slimmed prefetch). If even `paths_only` exceeds the cap, the inventory is truncated (`truncated: true`).
 
 ### PR title and body
 
@@ -308,6 +311,10 @@ The action uses the `node24` runtime (`action.yml`). Use `runs-on: ubuntu-latest
 # Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for local development, testing, and bundle instructions.
+
+# Credits
+
+The 1.2.0 auto-describe, LGTM clean-summary, large-diff slimming, and related workflow ideas were inspired by [@JuicyBurger](https://github.com/JuicyBurger)'s fork [JuicyBurger/bugbit](https://github.com/JuicyBurger/bugbit).
 
 # License
 

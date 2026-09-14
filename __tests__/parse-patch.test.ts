@@ -21,7 +21,7 @@ let mapPullRequestFiles: (
 let buildSizedDiff: (
   files: Array<Record<string, unknown>>,
   limit?: number,
-) => { diffMode: string; files: Array<Record<string, unknown>> };
+) => { diffMode: string; files: Array<Record<string, unknown>>; truncated?: boolean };
 
 beforeAll(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -169,9 +169,24 @@ describe('buildSizedDiff', () => {
     expect(hunkRanges.diffMode).toBe('hunk_ranges');
     expect((hunkRanges.files[0] as { hunks?: unknown[] }).hunks?.[0]).not.toHaveProperty('lines');
 
-    const pathsOnly = buildSizedDiff(files, 200);
+    const pathsOnly = buildSizedDiff(files, 800);
     expect(pathsOnly.diffMode).toBe('paths_only');
     expect(pathsOnly.files[0]).not.toHaveProperty('hunks');
     expect(pathsOnly.files).toHaveLength(8);
+  });
+
+  it('truncates paths_only when even the inventory exceeds the limit', () => {
+    const files = mapPullRequestFiles(
+      Array.from({ length: 20 }, (_, i) => ({
+        filename: `src/very-long-path-name-for-size-${i}.ts`,
+        status: 'modified',
+      })),
+    );
+
+    const result = buildSizedDiff(files, 80);
+    expect(result.diffMode).toBe('paths_only');
+    expect(result.truncated).toBe(true);
+    expect(result.files.length).toBeLessThan(20);
+    expect(JSON.stringify(result).length).toBeLessThanOrEqual(80);
   });
 });

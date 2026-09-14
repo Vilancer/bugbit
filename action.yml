@@ -71,7 +71,8 @@ inputs:
       When true, runs an additional agent pass that appends a structured PR
       description (type, bullets, mermaid, file walkthrough, test plan) after
       the developer's existing body. Runs once per PR — skipped when the
-      auto-describe markers are already present. Requires pull-requests: write.
+      auto-describe markers are already present. Requires pull-requests: write
+      and issues: write (the describe pass infers labels).
     required: false
     default: 'false'
   describe-labels:

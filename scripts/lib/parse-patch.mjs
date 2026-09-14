@@ -145,7 +145,7 @@ export function slimFilesToPathsOnly(files) {
  *
  * @param {Array<Record<string, unknown>>} fullFiles
  * @param {number} [limit]
- * @returns {{ diffMode: 'full' | 'hunk_ranges' | 'paths_only', files: Array<Record<string, unknown>> }}
+ * @returns {{ diffMode: 'full' | 'hunk_ranges' | 'paths_only', files: Array<Record<string, unknown>>, truncated?: boolean }}
  */
 export function buildSizedDiff(fullFiles, limit = DIFF_SIZE_LIMIT) {
   const fullOutput = { diffMode: 'full', files: fullFiles };
@@ -159,10 +159,22 @@ export function buildSizedDiff(fullFiles, limit = DIFF_SIZE_LIMIT) {
     return hunkRangesOutput;
   }
 
-  return {
-    diffMode: 'paths_only',
-    files: slimFilesToPathsOnly(fullFiles),
-  };
+  const pathsOnlyFiles = slimFilesToPathsOnly(fullFiles);
+  const pathsOnlyOutput = { diffMode: 'paths_only', files: pathsOnlyFiles };
+  if (JSON.stringify(pathsOnlyOutput).length <= limit) {
+    return pathsOnlyOutput;
+  }
+
+  const truncated = [];
+  const bounded = { diffMode: 'paths_only', truncated: true, files: truncated };
+  for (const file of pathsOnlyFiles) {
+    truncated.push(file);
+    if (JSON.stringify(bounded).length > limit) {
+      truncated.pop();
+      break;
+    }
+  }
+  return bounded;
 }
 
 /**

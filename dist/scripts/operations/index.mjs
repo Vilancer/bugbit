@@ -33733,7 +33733,7 @@ function slimFilesToPathsOnly(files) {
  *
  * @param {Array<Record<string, unknown>>} fullFiles
  * @param {number} [limit]
- * @returns {{ diffMode: 'full' | 'hunk_ranges' | 'paths_only', files: Array<Record<string, unknown>> }}
+ * @returns {{ diffMode: 'full' | 'hunk_ranges' | 'paths_only', files: Array<Record<string, unknown>>, truncated?: boolean }}
  */
 function buildSizedDiff(fullFiles, limit = DIFF_SIZE_LIMIT) {
   const fullOutput = { diffMode: 'full', files: fullFiles };
@@ -33747,10 +33747,22 @@ function buildSizedDiff(fullFiles, limit = DIFF_SIZE_LIMIT) {
     return hunkRangesOutput;
   }
 
-  return {
-    diffMode: 'paths_only',
-    files: slimFilesToPathsOnly(fullFiles),
-  };
+  const pathsOnlyFiles = slimFilesToPathsOnly(fullFiles);
+  const pathsOnlyOutput = { diffMode: 'paths_only', files: pathsOnlyFiles };
+  if (JSON.stringify(pathsOnlyOutput).length <= limit) {
+    return pathsOnlyOutput;
+  }
+
+  const truncated = [];
+  const bounded = { diffMode: 'paths_only', truncated: true, files: truncated };
+  for (const file of pathsOnlyFiles) {
+    truncated.push(file);
+    if (JSON.stringify(bounded).length > limit) {
+      truncated.pop();
+      break;
+    }
+  }
+  return bounded;
 }
 
 /**
@@ -33853,9 +33865,7 @@ async function getPrContext(deps) {
     if (typeof livePr.title === 'string') {
       title = livePr.title;
     }
-    if (typeof livePr.body === 'string') {
-      body = livePr.body;
-    }
+    body = typeof livePr.body === 'string' ? livePr.body : '';
   } catch {
     // Fall back to event payload.
   }
@@ -33932,7 +33942,16 @@ const DEFAULT_CLEAN_SUMMARY_BODY =
  * @param {unknown[]} findings
  */
 async function postReview(deps, findings) {
-  if (!Array.isArray(findings) || findings.length === 0) {
+  if (!Array.isArray(findings)) {
+    return {
+      error: {
+        code: 'INVALID_ARGS',
+        message: 'findings must be an array',
+      },
+    };
+  }
+
+  if (findings.length === 0) {
     if (!deps.postCleanSummary) {
       return { posted: [], reviewId: null, cleanSummary: false };
     }
@@ -34159,9 +34178,7 @@ async function updatePrDescription(deps, { title, body }) {
       repo,
       pull_number: pr.number,
     });
-    if (typeof livePr.body === 'string') {
-      existingBody = livePr.body;
-    }
+    existingBody = typeof livePr.body === 'string' ? livePr.body : '';
   } catch {
     // Fall back to event payload body.
   }

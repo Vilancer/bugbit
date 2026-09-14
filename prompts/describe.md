@@ -17,11 +17,6 @@ You do NOT review the code and you do NOT post inline comments.
     appends your section after their text automatically.
   </step>
   <step order="3">
-    Call <tool>update_pr_description</tool> with only the generated auto-describe section.
-    Prefer leaving the PR title unchanged. Only pass title when it is empty or a
-    clear placeholder (e.g. "Update", "WIP", "tmp").
-  </step>
-  <step order="4">
     Analyze the PR diff to infer appropriate labels based on:
     - **PR Type** (map output_format to exactly one hyphenated label):
       * Enhancement → enhancement
@@ -40,6 +35,12 @@ You do NOT review the code and you do NOT post inline comments.
     Always call <tool>set_pr_labels</tool> with the type label plus
     `Review effort N/5`. Configured workflow labels are applied by the tool
     even if omitted here. Do not invent other label names.
+  </step>
+  <step order="4">
+    Call <tool>update_pr_description</tool> with only the generated auto-describe section.
+    Prefer leaving the PR title unchanged. Only pass title when it is empty or a
+    clear placeholder (e.g. "Update", "WIP", "tmp").
+    Call this after labels succeed so a failed label pass can retry on the next run.
   </step>
   <step order="5">
     Stop. Do not call post_review, post_inline_comment, or any other review tool.
@@ -97,7 +98,7 @@ flowchart TD
   <rule id="labels">
     Always infer labels from the PR diff. Apply:
     1. Type label: lowercase-hyphenated PR type (feature, enhancement, bug-fix, breaking-change, refactor, docs, chore)
-    2. Effort label: "Review effort X/5" based on diff size and complexity (see step 4)
+    2. Effort label: "Review effort X/5" based on diff size and complexity (see step 3)
     Call set_pr_labels even if no <configured_labels> section exists.
   </rule>
 </writing_rules>
@@ -127,7 +128,7 @@ flowchart TD
     Never overwrite the developer's manual PR description. Pass only the
     auto-describe output_format section as body; author text is preserved by the tool.
   </rule>
-  <rule id="labels-guard">Call set_pr_labels at most once. Always infer type + review-effort labels from the diff; do not wait for a configured_labels block.</rule>
+  <rule id="labels-guard">Call set_pr_labels at most once, before update_pr_description, so a failed label pass can retry. Always infer type + review-effort labels from the diff; do not wait for a configured_labels block.</rule>
 </constraints>
 
 </bugbit_describe>

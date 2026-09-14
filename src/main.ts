@@ -52,7 +52,7 @@ async function run(): Promise<void> {
     core.setSecret(githubToken);
 
     const model = core.getInput('model') || 'composer-2.5';
-    const modesInput = core.getInput('review-modes') || 'code-review';
+    const modesInput = core.getInput('review-modes');
     const saveStreamLog = core.getBooleanInput('save-stream-log');
     const postCleanSummaryInput = core.getInput('post-clean-summary');
     const postCleanSummary =

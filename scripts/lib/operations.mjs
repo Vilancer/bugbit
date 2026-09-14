@@ -27,9 +27,7 @@ export async function getPrContext(deps) {
     if (typeof livePr.title === 'string') {
       title = livePr.title;
     }
-    if (typeof livePr.body === 'string') {
-      body = livePr.body;
-    }
+    body = typeof livePr.body === 'string' ? livePr.body : '';
   } catch {
     // Fall back to event payload.
   }
@@ -106,7 +104,16 @@ const DEFAULT_CLEAN_SUMMARY_BODY =
  * @param {unknown[]} findings
  */
 export async function postReview(deps, findings) {
-  if (!Array.isArray(findings) || findings.length === 0) {
+  if (!Array.isArray(findings)) {
+    return {
+      error: {
+        code: 'INVALID_ARGS',
+        message: 'findings must be an array',
+      },
+    };
+  }
+
+  if (findings.length === 0) {
     if (!deps.postCleanSummary) {
       return { posted: [], reviewId: null, cleanSummary: false };
     }
@@ -333,9 +340,7 @@ export async function updatePrDescription(deps, { title, body }) {
       repo,
       pull_number: pr.number,
     });
-    if (typeof livePr.body === 'string') {
-      existingBody = livePr.body;
-    }
+    existingBody = typeof livePr.body === 'string' ? livePr.body : '';
   } catch {
     // Fall back to event payload body.
   }
