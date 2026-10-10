@@ -151,6 +151,40 @@ describe('runClaudeAgent', () => {
     });
   });
 
+  it('resumes the session with the nudge until the pass is done', async () => {
+    const { query } = mockSdk([]);
+    query.mockImplementation(() =>
+      (async function* () {
+        yield* success;
+      })(),
+    );
+    let calls = 0;
+    const completion = { done: () => ++calls > 1, missing: 'a post_review call', nudge: 'finish it' };
+
+    await runClaudeAgent({ kind: 'api-key', key: 'k' }, 'p', '/tmp/repo', tools, { completion });
+
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls[1][0]).toMatchObject({
+      prompt: 'finish it',
+      options: expect.objectContaining({ resume: 'sess-1' }),
+    });
+  });
+
+  it('fails the run when the model never does the required call', async () => {
+    const { query } = mockSdk([]);
+    query.mockImplementation(() =>
+      (async function* () {
+        yield* success;
+      })(),
+    );
+    const completion = { done: () => false, missing: 'a post_review call', nudge: 'finish it' };
+
+    await expect(
+      runClaudeAgent({ kind: 'api-key', key: 'k' }, 'p', '/tmp/repo', tools, { completion }),
+    ).rejects.toThrow('finished without a post_review call after 2 follow-up(s)');
+    expect(query).toHaveBeenCalledTimes(3);
+  });
+
   it('throws when the run ends with an error result', async () => {
     mockSdk([{ type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['boom'] }]);
     await expect(

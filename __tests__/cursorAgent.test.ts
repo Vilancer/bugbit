@@ -146,4 +146,38 @@ describe('runAgent', () => {
 
     setTimeoutSpy.mockRestore();
   });
+
+  it('sends the nudge as a follow-up on the same agent until the pass is done', async () => {
+    const run = (id: string) => ({
+      id,
+      stream: async function* () {},
+      wait: jest.fn().mockResolvedValue({ status: 'completed', id }),
+    });
+    const send = jest.fn().mockResolvedValueOnce(run('run-1')).mockResolvedValueOnce(run('run-2'));
+    mockCreate.mockResolvedValue({ agentId: 'agent-1', send, [Symbol.asyncDispose]: async () => {} } as never);
+    let checks = 0;
+
+    const result = await runAgent('k', 'composer-2.5', 'p', '/tmp/repo', makeCustomTools(), {
+      completion: { done: () => ++checks > 1, missing: 'a post_review call', nudge: 'finish it' },
+    });
+
+    expect(send).toHaveBeenNthCalledWith(2, 'finish it');
+    expect(result.runId).toBe('run-1');
+  });
+
+  it('fails when the agent never does the required call', async () => {
+    const send = jest.fn().mockImplementation(async () => ({
+      id: 'run-x',
+      stream: async function* () {},
+      wait: jest.fn().mockResolvedValue({ status: 'completed', id: 'run-x' }),
+    }));
+    mockCreate.mockResolvedValue({ agentId: 'agent-1', send, [Symbol.asyncDispose]: async () => {} } as never);
+
+    await expect(
+      runAgent('k', 'composer-2.5', 'p', '/tmp/repo', makeCustomTools(), {
+        completion: { done: () => false, missing: 'a post_review call', nudge: 'finish it' },
+      }),
+    ).rejects.toThrow('finished without a post_review call after 2 follow-up(s)');
+    expect(send).toHaveBeenCalledTimes(3);
+  });
 });

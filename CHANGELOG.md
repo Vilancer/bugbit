@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- A review pass that ended without posting now resumes the agent (up to two follow-ups) and fails the job if it still hasn't called `post_review`, instead of going green with nothing on the PR. Same for the describe pass and `update_pr_description`. Seen on `provider: claude` when the model ended its turn after `/security-review` printed its report.
+- `.cursor/permissions.json` is only copied into the checkout for `provider: cursor`.
+
 ## [1.3.0] - 2026-10-10
 
 ### Added

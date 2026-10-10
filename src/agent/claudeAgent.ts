@@ -9,6 +9,7 @@ import {
 } from '../runtime/claudeSdk';
 import { AGENT_TIMEOUT_MESSAGE, AGENT_TIMEOUT_MS } from './runWait';
 import { reviewGuardHooks } from './claudeGuard';
+import type { PassCompletion } from './completion';
 import { streamLogPathFor } from './streamLog';
 
 export const BUGBIT_MCP_SERVER = 'bugbit';
@@ -63,6 +64,8 @@ export interface RunClaudeAgentOptions {
   /** Skill names visible to the session; [] hides all skills (describe pass). */
   skills?: string[];
   timeoutMs?: number;
+  /** The pass's required outcome; the session is resumed with `nudge` until `done()` holds. */
+  completion?: PassCompletion;
 }
 
 export interface RunClaudeAgentResult {
@@ -211,9 +214,7 @@ export async function runClaudeAgent(
   let runId = 'unknown';
 
   try {
-    const run = sdk.query({
-      prompt,
-      options: {
+    const queryOptions = {
         cwd,
         model: options.model || undefined,
         abortController,
@@ -237,32 +238,48 @@ export async function runClaudeAgent(
         hooks: reviewGuardHooks(),
         systemPrompt: { type: 'preset', preset: 'claude_code', append: options.systemPromptAppend },
         stderr: (data: string) => core.debug(`[claude] ${data.trimEnd()}`),
-      },
-    });
+    };
 
-    let result: Record<string, unknown> | undefined;
-    for await (const message of run) {
-      if (message.type === 'system' && message.subtype === 'init' && message.session_id) {
-        runId = String(message.session_id);
-        core.info(`Started Claude session ${runId}`);
-        if (options.saveStreamLog) {
-          streamLogPath = streamLogPathFor(runId);
-          streamLog = fs.createWriteStream(streamLogPath, { flags: 'a' });
+    const completion = options.completion;
+    let nextPrompt = prompt;
+    for (let nudges = 0; ; nudges++) {
+      // Follow-ups resume the same session, so the model keeps its findings so far.
+      const run = sdk.query({
+        prompt: nextPrompt,
+        options: nudges === 0 ? queryOptions : { ...queryOptions, resume: runId },
+      });
+
+      let result: Record<string, unknown> | undefined;
+      for await (const message of run) {
+        if (message.type === 'system' && message.subtype === 'init' && message.session_id) {
+          runId = String(message.session_id);
+          core.info(`${nudges === 0 ? 'Started' : 'Resumed'} Claude session ${runId}`);
+          if (options.saveStreamLog && !streamLog) {
+            streamLogPath = streamLogPathFor(runId);
+            streamLog = fs.createWriteStream(streamLogPath, { flags: 'a' });
+          }
+        }
+        streamLog?.write(`${JSON.stringify(message)}\n`);
+        logMessage(message);
+        if (message.type === 'result') {
+          result = message;
         }
       }
-      streamLog?.write(`${JSON.stringify(message)}\n`);
-      logMessage(message);
-      if (message.type === 'result') {
-        result = message;
-      }
-    }
 
-    if (!result) {
-      throw new Error('Claude agent ended without a result message');
-    }
-    if (result.subtype !== 'success' || result.is_error) {
-      const detail = Array.isArray(result.errors) ? `: ${result.errors.join('; ')}` : '';
-      throw new Error(`Claude agent run failed (${String(result.subtype)})${detail}`);
+      if (!result) {
+        throw new Error('Claude agent ended without a result message');
+      }
+      if (result.subtype !== 'success' || result.is_error) {
+        const detail = Array.isArray(result.errors) ? `: ${result.errors.join('; ')}` : '';
+        throw new Error(`Claude agent run failed (${String(result.subtype)})${detail}`);
+      }
+
+      if (!completion || completion.done()) break;
+      if (nudges >= (completion.maxNudges ?? 2)) {
+        throw new Error(`Claude agent finished without ${completion.missing} after ${nudges} follow-up(s)`);
+      }
+      core.warning(`Claude agent stopped without ${completion.missing}; asking it to finish (${nudges + 1})`);
+      nextPrompt = completion.nudge;
     }
 
     core.info('Run completed with status=success');

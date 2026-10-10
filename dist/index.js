@@ -463,56 +463,69 @@ async function runClaudeAgent(auth, prompt, cwd, customTools, options = {}) {
     let streamLogPath;
     let runId = 'unknown';
     try {
-        const run = sdk.query({
-            prompt,
-            options: {
-                cwd,
-                model: options.model || undefined,
-                abortController,
-                env: claudeAgentEnv(auth),
-                // Never load settings, hooks, or CLAUDE.md-driven config from the PR head checkout,
-                // nor the token account's claude.ai connectors, synced skills, or plugins.
-                settingSources: [],
-                strictMcpConfig: true,
-                settings: {
-                    disableClaudeAiConnectors: true,
-                    syncClaudeAiSkills: false,
-                    syncClaudeAiPlugins: false,
-                    // No "Generated with Claude Code" footer on auto-describe bodies or review text.
-                    attribution: { commit: '', pr: '', sessionUrl: false },
-                },
-                skills: options.skills ?? 'all',
-                permissionMode: 'dontAsk',
-                allowedTools: [...READ_ONLY_TOOLS, ...toolNames],
-                disallowedTools: DENIED_TOOLS,
-                mcpServers: { [exports.BUGBIT_MCP_SERVER]: createBugbitMcpServer(sdk, customTools) },
-                hooks: (0, claudeGuard_1.reviewGuardHooks)(),
-                systemPrompt: { type: 'preset', preset: 'claude_code', append: options.systemPromptAppend },
-                stderr: (data) => core.debug(`[claude] ${data.trimEnd()}`),
+        const queryOptions = {
+            cwd,
+            model: options.model || undefined,
+            abortController,
+            env: claudeAgentEnv(auth),
+            // Never load settings, hooks, or CLAUDE.md-driven config from the PR head checkout,
+            // nor the token account's claude.ai connectors, synced skills, or plugins.
+            settingSources: [],
+            strictMcpConfig: true,
+            settings: {
+                disableClaudeAiConnectors: true,
+                syncClaudeAiSkills: false,
+                syncClaudeAiPlugins: false,
+                // No "Generated with Claude Code" footer on auto-describe bodies or review text.
+                attribution: { commit: '', pr: '', sessionUrl: false },
             },
-        });
-        let result;
-        for await (const message of run) {
-            if (message.type === 'system' && message.subtype === 'init' && message.session_id) {
-                runId = String(message.session_id);
-                core.info(`Started Claude session ${runId}`);
-                if (options.saveStreamLog) {
-                    streamLogPath = (0, streamLog_1.streamLogPathFor)(runId);
-                    streamLog = fs.createWriteStream(streamLogPath, { flags: 'a' });
+            skills: options.skills ?? 'all',
+            permissionMode: 'dontAsk',
+            allowedTools: [...READ_ONLY_TOOLS, ...toolNames],
+            disallowedTools: DENIED_TOOLS,
+            mcpServers: { [exports.BUGBIT_MCP_SERVER]: createBugbitMcpServer(sdk, customTools) },
+            hooks: (0, claudeGuard_1.reviewGuardHooks)(),
+            systemPrompt: { type: 'preset', preset: 'claude_code', append: options.systemPromptAppend },
+            stderr: (data) => core.debug(`[claude] ${data.trimEnd()}`),
+        };
+        const completion = options.completion;
+        let nextPrompt = prompt;
+        for (let nudges = 0;; nudges++) {
+            // Follow-ups resume the same session, so the model keeps its findings so far.
+            const run = sdk.query({
+                prompt: nextPrompt,
+                options: nudges === 0 ? queryOptions : { ...queryOptions, resume: runId },
+            });
+            let result;
+            for await (const message of run) {
+                if (message.type === 'system' && message.subtype === 'init' && message.session_id) {
+                    runId = String(message.session_id);
+                    core.info(`${nudges === 0 ? 'Started' : 'Resumed'} Claude session ${runId}`);
+                    if (options.saveStreamLog && !streamLog) {
+                        streamLogPath = (0, streamLog_1.streamLogPathFor)(runId);
+                        streamLog = fs.createWriteStream(streamLogPath, { flags: 'a' });
+                    }
+                }
+                streamLog?.write(`${JSON.stringify(message)}\n`);
+                logMessage(message);
+                if (message.type === 'result') {
+                    result = message;
                 }
             }
-            streamLog?.write(`${JSON.stringify(message)}\n`);
-            logMessage(message);
-            if (message.type === 'result') {
-                result = message;
+            if (!result) {
+                throw new Error('Claude agent ended without a result message');
             }
-        }
-        if (!result) {
-            throw new Error('Claude agent ended without a result message');
-        }
-        if (result.subtype !== 'success' || result.is_error) {
-            const detail = Array.isArray(result.errors) ? `: ${result.errors.join('; ')}` : '';
-            throw new Error(`Claude agent run failed (${String(result.subtype)})${detail}`);
+            if (result.subtype !== 'success' || result.is_error) {
+                const detail = Array.isArray(result.errors) ? `: ${result.errors.join('; ')}` : '';
+                throw new Error(`Claude agent run failed (${String(result.subtype)})${detail}`);
+            }
+            if (!completion || completion.done())
+                break;
+            if (nudges >= (completion.maxNudges ?? 2)) {
+                throw new Error(`Claude agent finished without ${completion.missing} after ${nudges} follow-up(s)`);
+            }
+            core.warning(`Claude agent stopped without ${completion.missing}; asking it to finish (${nudges + 1})`);
+            nextPrompt = completion.nudge;
         }
         core.info('Run completed with status=success');
         return { runId, streamLogPath };
@@ -619,6 +632,47 @@ function reviewGuardHooks() {
         ],
     };
 }
+
+
+/***/ }),
+
+/***/ 35059:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.DESCRIBE_NUDGE = exports.REVIEW_NUDGE = void 0;
+exports.requireToolCall = requireToolCall;
+/**
+ * Wraps tools so the pass knows whether any of `required` was called, and returns the completion
+ * check the agent runners use to resume a model that stopped before doing its job.
+ */
+function requireToolCall(tools, required, nudge) {
+    let called = false;
+    const wrapped = Object.fromEntries(Object.entries(tools).map(([name, tool]) => [
+        name,
+        required.includes(name)
+            ? {
+                ...tool,
+                execute: async (...args) => {
+                    const result = await tool.execute(...args);
+                    called = true;
+                    return result;
+                },
+            }
+            : tool,
+    ]));
+    return {
+        tools: wrapped,
+        completion: { done: () => called, missing: `a ${required.join(' or ')} call`, nudge },
+    };
+}
+exports.REVIEW_NUDGE = 'You stopped before finishing the review. Run any of the requested skills you have not run yet, ' +
+    'then call post_review once with every finding (an empty findings array if there are none). ' +
+    'The review is not done until post_review has been called.';
+exports.DESCRIBE_NUDGE = 'You stopped before finishing. Call set_pr_labels, then update_pr_description with the ' +
+    'auto-describe section. The pass is not done until update_pr_description has been called.';
 
 
 /***/ }),
@@ -744,29 +798,41 @@ async function runAgent(apiKey, model, prompt, cwd, customTools, options = {}) {
                     settingSources: [],
                 },
             }), true);
-            const run = await agent.send(prompt);
-            activeRun = run;
-            core.info(`Started run ${run.id} (agent ${agent.agentId})`);
-            const streamLogPath = options.saveStreamLog ? (0, streamLog_1.streamLogPathFor)(run.id) : undefined;
+            const firstRun = await agent.send(prompt);
+            core.info(`Started run ${firstRun.id} (agent ${agent.agentId})`);
+            const streamLogPath = options.saveStreamLog ? (0, streamLog_1.streamLogPathFor)(firstRun.id) : undefined;
             logger = new streamLog_1.StreamLogger({
                 saveStreamLog: options.saveStreamLog,
                 streamLogPath,
             });
-            for await (const event of run.stream()) {
-                (0, runWait_1.assertWithinDeadline)(deadlineMs);
-                logger.handleEvent(event);
+            const completion = options.completion;
+            let run = firstRun;
+            for (let nudges = 0;; nudges++) {
+                activeRun = run;
+                for await (const event of run.stream()) {
+                    (0, runWait_1.assertWithinDeadline)(deadlineMs);
+                    logger.handleEvent(event);
+                }
+                const result = await (0, runWait_1.waitForRunWithHeartbeat)(run, (0, runWait_1.remainingMs)(deadlineMs));
+                if (result.status === 'error') {
+                    throw new Error(`Agent run failed: ${result.id}`);
+                }
+                if (result.status === 'cancelled') {
+                    throw new Error(`Agent run cancelled: ${result.id}`);
+                }
+                core.info(`Run completed with status=${result.status}`);
+                if (!completion || completion.done())
+                    break;
+                if (nudges >= (completion.maxNudges ?? 2)) {
+                    throw new Error(`Cursor agent finished without ${completion.missing} after ${nudges} follow-up(s)`);
+                }
+                core.warning(`Cursor agent stopped without ${completion.missing}; asking it to finish (${nudges + 1})`);
+                // A follow-up on the same agent keeps its conversation and findings so far.
+                run = await agent.send(completion.nudge);
             }
             await logger.close();
-            const result = await (0, runWait_1.waitForRunWithHeartbeat)(run, (0, runWait_1.remainingMs)(deadlineMs));
-            if (result.status === 'error') {
-                throw new Error(`Agent run failed: ${result.id}`);
-            }
-            if (result.status === 'cancelled') {
-                throw new Error(`Agent run cancelled: ${result.id}`);
-            }
-            core.info(`Run completed with status=${result.status}`);
             return {
-                runId: run.id,
+                runId: firstRun.id,
                 streamLogPath,
             };
         }
@@ -1439,6 +1505,7 @@ const core = __importStar(__nccwpck_require__(39910));
 const path = __importStar(__nccwpck_require__(16928));
 const cursorAgent_1 = __nccwpck_require__(76486);
 const claudeAgent_1 = __nccwpck_require__(8422);
+const completion_1 = __nccwpck_require__(35059);
 const artifactUpload_1 = __nccwpck_require__(16625);
 const actionPath_1 = __nccwpck_require__(56063);
 const checkCheckout_1 = __nccwpck_require__(14944);
@@ -1544,7 +1611,10 @@ async function run() {
             core.setFailed(error instanceof Error ? error.message : String(error));
             return;
         }
-        (0, tools_1.copyPermissionsToWorkspace)(actionPath, cwd);
+        if (provider === 'cursor') {
+            // Cursor-only shell allowlist; on Claude it would just be an untracked file the model reads.
+            (0, tools_1.copyPermissionsToWorkspace)(actionPath, cwd);
+        }
         const promptsDir = path.join(actionPath, 'prompts');
         const prefetched = await (0, tools_1.prefetchPrData)(toolDeps);
         const reviewModes = (0, reviewModes_1.parseReviewModes)(modesInput);
@@ -1568,12 +1638,19 @@ async function run() {
                 'Set auto-describe to true and/or provide at least one review-modes value.');
             return;
         }
-        async function runPass(label, prompt, tools, saveLog, claudeOptions = {}) {
+        async function runPass(label, prompt, rawTools, saveLog, claudeOptions = {}) {
+            // Models sometimes end their turn early (e.g. after printing a skill's report); resume them
+            // until the pass has posted, and fail loudly rather than go green with nothing on the PR.
+            const required = label === 'describe'
+                ? (0, completion_1.requireToolCall)(rawTools, ['update_pr_description'], completion_1.DESCRIBE_NUDGE)
+                : (0, completion_1.requireToolCall)(rawTools, ['post_review', 'post_inline_comment'], completion_1.REVIEW_NUDGE);
+            const { tools, completion } = required;
             if (claudeAuth) {
                 core.info(`Starting Claude agent (model: ${model || 'default'}, pass: ${label})`);
                 const result = await (0, claudeAgent_1.runClaudeAgent)(claudeAuth, prompt, cwd, tools, {
                     model,
                     saveStreamLog: saveLog,
+                    completion,
                     ...claudeOptions,
                 });
                 core.info(`${label} pass completed: session ${result.runId}`);
@@ -1582,6 +1659,7 @@ async function run() {
             core.info(`Starting Cursor agent (model: ${model}, pass: ${label})`);
             const result = await (0, cursorAgent_1.runAgent)(apiKey, model, prompt, cwd, tools, {
                 saveStreamLog: saveLog,
+                completion,
             });
             core.info(`${label} pass completed: run ${result.runId}`);
             return result;
