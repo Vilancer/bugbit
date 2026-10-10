@@ -2,6 +2,7 @@ import * as core from '@actions/core';
 import * as path from 'path';
 import { runAgent } from './agent/cursorAgent';
 import { runClaudeAgent } from './agent/claudeAgent';
+import { DESCRIBE_NUDGE, REVIEW_NUDGE, requireToolCall } from './agent/completion';
 import {
   artifactUploadErrorMessage,
   streamLogArtifactName,
@@ -152,7 +153,10 @@ async function run(): Promise<void> {
       return;
     }
 
-    copyPermissionsToWorkspace(actionPath, cwd);
+    if (provider === 'cursor') {
+      // Cursor-only shell allowlist; on Claude it would just be an untracked file the model reads.
+      copyPermissionsToWorkspace(actionPath, cwd);
+    }
     const promptsDir = path.join(actionPath, 'prompts');
 
     const prefetched = await prefetchPrData(toolDeps);
@@ -186,17 +190,25 @@ async function run(): Promise<void> {
     }
 
     async function runPass(
-      label: string,
+      label: 'describe' | 'review',
       prompt: string,
-      tools: ReturnType<typeof createBugbitTools>,
+      rawTools: ReturnType<typeof createBugbitTools>,
       saveLog: boolean,
       claudeOptions: { systemPromptAppend?: string; skills?: string[] } = {},
     ): Promise<{ runId: string; streamLogPath?: string }> {
+      // Models sometimes end their turn early (e.g. after printing a skill's report); resume them
+      // until the pass has posted, and fail loudly rather than go green with nothing on the PR.
+      const required =
+        label === 'describe'
+          ? requireToolCall(rawTools, ['update_pr_description'], DESCRIBE_NUDGE)
+          : requireToolCall(rawTools, ['post_review', 'post_inline_comment'], REVIEW_NUDGE);
+      const { tools, completion } = required;
       if (claudeAuth) {
         core.info(`Starting Claude agent (model: ${model || 'default'}, pass: ${label})`);
         const result = await runClaudeAgent(claudeAuth, prompt, cwd, tools, {
           model,
           saveStreamLog: saveLog,
+          completion,
           ...claudeOptions,
         });
         core.info(`${label} pass completed: session ${result.runId}`);
@@ -205,6 +217,7 @@ async function run(): Promise<void> {
       core.info(`Starting Cursor agent (model: ${model}, pass: ${label})`);
       const result = await runAgent(apiKey, model, prompt, cwd, tools, {
         saveStreamLog: saveLog,
+        completion,
       });
       core.info(`${label} pass completed: run ${result.runId}`);
       return result;

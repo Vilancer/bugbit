@@ -1,12 +1,15 @@
 import { Agent, CursorAgentError, type SDKCustomTool } from '@cursor/sdk';
 import * as core from '@actions/core';
 import { assertWithinDeadline, AGENT_TIMEOUT_MS, remainingMs, waitForRunWithHeartbeat } from './runWait';
+import type { PassCompletion } from './completion';
 import { StreamLogger, streamLogPathFor, type StreamEvent } from './streamLog';
 
 export { AGENT_TIMEOUT_MS } from './runWait';
 
 export interface RunAgentOptions {
   saveStreamLog?: boolean;
+  /** The pass's required outcome; the agent gets `nudge` as a follow-up until `done()` holds. */
+  completion?: PassCompletion;
 }
 
 export interface RunAgentResult {
@@ -45,37 +48,49 @@ export async function runAgent(
       },
     });
 
-    const run = await agent.send(prompt);
-    activeRun = run;
-    core.info(`Started run ${run.id} (agent ${agent.agentId})`);
+    const firstRun = await agent.send(prompt);
+    core.info(`Started run ${firstRun.id} (agent ${agent.agentId})`);
 
-    const streamLogPath = options.saveStreamLog ? streamLogPathFor(run.id) : undefined;
+    const streamLogPath = options.saveStreamLog ? streamLogPathFor(firstRun.id) : undefined;
 
     logger = new StreamLogger({
       saveStreamLog: options.saveStreamLog,
       streamLogPath,
     });
 
-    for await (const event of run.stream()) {
-      assertWithinDeadline(deadlineMs);
-      logger.handleEvent(event as StreamEvent);
+    const completion = options.completion;
+    let run = firstRun;
+    for (let nudges = 0; ; nudges++) {
+      activeRun = run;
+      for await (const event of run.stream()) {
+        assertWithinDeadline(deadlineMs);
+        logger.handleEvent(event as StreamEvent);
+      }
+
+      const result = await waitForRunWithHeartbeat(run, remainingMs(deadlineMs));
+
+      if (result.status === 'error') {
+        throw new Error(`Agent run failed: ${result.id}`);
+      }
+      if (result.status === 'cancelled') {
+        throw new Error(`Agent run cancelled: ${result.id}`);
+      }
+
+      core.info(`Run completed with status=${result.status}`);
+
+      if (!completion || completion.done()) break;
+      if (nudges >= (completion.maxNudges ?? 2)) {
+        throw new Error(`Cursor agent finished without ${completion.missing} after ${nudges} follow-up(s)`);
+      }
+      core.warning(`Cursor agent stopped without ${completion.missing}; asking it to finish (${nudges + 1})`);
+      // A follow-up on the same agent keeps its conversation and findings so far.
+      run = await agent.send(completion.nudge);
     }
 
     await logger.close();
 
-    const result = await waitForRunWithHeartbeat(run, remainingMs(deadlineMs));
-
-    if (result.status === 'error') {
-      throw new Error(`Agent run failed: ${result.id}`);
-    }
-    if (result.status === 'cancelled') {
-      throw new Error(`Agent run cancelled: ${result.id}`);
-    }
-
-    core.info(`Run completed with status=${result.status}`);
-
     return {
-      runId: run.id,
+      runId: firstRun.id,
       streamLogPath,
     };
   } catch (error) {
