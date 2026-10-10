@@ -152,3 +152,6 @@ vite.config.ts.timestamp-*
 # GSD planning docs (local-only)
 .planning/
 bugbit-project-overview.docx
+
+# Agent planning lives in the outer workspace repo, not the product
+.planning/
