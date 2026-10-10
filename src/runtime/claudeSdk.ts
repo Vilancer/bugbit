@@ -37,9 +37,7 @@ export interface ClaudeMcpToolResult {
   isError?: boolean;
 }
 
-export interface ClaudeQuery extends AsyncIterable<Record<string, unknown>> {
-  interrupt?: () => Promise<void>;
-}
+export type ClaudeQuery = AsyncIterable<Record<string, unknown>>;
 
 export interface ClaudeAgentSdk {
   query(params: { prompt: string; options: Record<string, unknown> }): ClaudeQuery;
@@ -99,14 +97,16 @@ export function installClaudeAgentSdk(installDir: string = claudeSdkInstallDir()
 
 let sdkPromise: Promise<ClaudeAgentSdk> | undefined;
 
-export function loadClaudeAgentSdk(): Promise<ClaudeAgentSdk> {
-  if (!sdkPromise) {
-    sdkPromise = Promise.resolve()
-      .then(() => installClaudeAgentSdk())
-      .then((entryPath) => dynamicImport<ClaudeAgentSdk>(pathToFileURL(entryPath).href));
-    sdkPromise.catch(() => {
-      sdkPromise = undefined;
-    });
+async function importClaudeAgentSdk(): Promise<ClaudeAgentSdk> {
+  try {
+    return await dynamicImport<ClaudeAgentSdk>(pathToFileURL(installClaudeAgentSdk()).href);
+  } catch (error) {
+    sdkPromise = undefined; // let a later call retry the install
+    throw error;
   }
+}
+
+export function loadClaudeAgentSdk(): Promise<ClaudeAgentSdk> {
+  sdkPromise ??= importClaudeAgentSdk();
   return sdkPromise;
 }

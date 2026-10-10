@@ -1,9 +1,7 @@
 import { Agent, CursorAgentError, type SDKCustomTool } from '@cursor/sdk';
 import * as core from '@actions/core';
-import * as os from 'node:os';
-import * as path from 'node:path';
 import { assertWithinDeadline, AGENT_TIMEOUT_MS, remainingMs, waitForRunWithHeartbeat } from './runWait';
-import { StreamLogger, type StreamEvent } from './streamLog';
+import { StreamLogger, streamLogPathFor, type StreamEvent } from './streamLog';
 
 export { AGENT_TIMEOUT_MS } from './runWait';
 
@@ -48,12 +46,7 @@ export async function runAgent(
     activeRun = run;
     core.info(`Started run ${run.id} (agent ${agent.agentId})`);
 
-    const streamLogPath = options.saveStreamLog
-      ? path.join(
-          process.env.RUNNER_TEMP ?? os.tmpdir(),
-          `bugbit-stream-${run.id}.jsonl`,
-        )
-      : undefined;
+    const streamLogPath = options.saveStreamLog ? streamLogPathFor(run.id) : undefined;
 
     logger = new StreamLogger({
       saveStreamLog: options.saveStreamLog,
