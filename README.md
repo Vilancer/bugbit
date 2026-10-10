@@ -281,9 +281,10 @@ It opens a browser login and prints a long-lived OAuth token (`sk-ant-oat01-…`
 
 How the session is locked down:
 
-- Read-only: `permissionMode: dontAsk` with an allowlist (`Read`, `Grep`, `Glob`, `Skill`, subagents, read-only `git` commands, bugbit's tools). `Edit`, `Write`, `WebFetch`, and `WebSearch` are denied, and the skills' `--fix`/`--comment` paths are disabled by the overlay.
+- Read-only: `permissionMode: dontAsk` with an allowlist (`Read`, `Grep`, `Glob`, `Skill`, subagents, bugbit's tools). `Edit`, `Write`, `WebFetch`, and `WebSearch` are denied, and the skills' `--fix`/`--comment` paths are disabled by the overlay.
+- A guard checks every Bash and file call, including subagents': Bash may only run one plain read-only `git` command (`diff`, `log`, `show`, `blame`, `status`, `rev-parse`, `ls-files`, `merge-base`, no `--output`/`--no-index`, no pipes or chaining), and `Read`/`Grep`/`Glob` can't open `.git/config`, `.env*`, keys, `/proc` or `$RUNNER_TEMP`.
 - Ignores everything the PR head could control: no `.claude/settings.json`, hooks, `.mcp.json`, or plugins are loaded (`settingSources: []`, `strictMcpConfig`). The token account's claude.ai connectors and synced skills/plugins are off.
-- The agent process gets the Claude token only; `INPUT_*`, `GITHUB_TOKEN`, and Actions runtime tokens are stripped from its environment. PR comments go through bugbit's in-process MCP tools.
+- The agent process gets the Claude token only; `INPUT_*`, `GITHUB_TOKEN`, and Actions runtime tokens are stripped from its environment. PR comments go through bugbit's in-process MCP tools, which redact the Claude credential, the GitHub token and anything token-shaped before posting (GitHub masks secrets in logs, not in comments).
 - The SDK (`@anthropic-ai/claude-agent-sdk`, pinned) is installed into `$RUNNER_TEMP` on each run (~10–30s, ~250MB native binary) because it cannot be bundled into `dist/`.
 
 # Recommended permissions
