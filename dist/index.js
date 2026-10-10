@@ -466,6 +466,8 @@ async function runClaudeAgent(auth, prompt, cwd, customTools, options = {}) {
                     disableClaudeAiConnectors: true,
                     syncClaudeAiSkills: false,
                     syncClaudeAiPlugins: false,
+                    // No "Generated with Claude Code" footer on auto-describe bodies or review text.
+                    attribution: { commit: '', pr: '', sessionUrl: false },
                 },
                 skills: options.skills ?? 'all',
                 permissionMode: 'dontAsk',

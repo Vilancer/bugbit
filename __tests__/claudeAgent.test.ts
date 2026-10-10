@@ -127,7 +127,10 @@ describe('runClaudeAgent', () => {
       permissionMode: 'dontAsk',
       settingSources: [],
       strictMcpConfig: true,
-      settings: expect.objectContaining({ disableClaudeAiConnectors: true }),
+      settings: expect.objectContaining({
+        disableClaudeAiConnectors: true,
+        attribution: { commit: '', pr: '', sessionUrl: false },
+      }),
       skills: 'all',
       systemPrompt: { type: 'preset', preset: 'claude_code', append: 'overlay' },
     });
