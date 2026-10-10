@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 import { dynamicImport } from '../runtime/dynamicImport';
+import { redactSecrets } from './redact';
 import { resolveActionModuleUrl } from '../runtime/resolveActionModule';
 import type { BugbitToolDeps, OpsDeps, PrefetchedPrData } from './types';
 
@@ -290,9 +291,17 @@ export function createBugbitTools(
     },
   };
 
-  if (pass === 'describe') {
-    return { get_pr_context, get_diff, update_pr_description, set_pr_labels };
-  }
+  const tools =
+    pass === 'describe'
+      ? { get_pr_context, get_diff, update_pr_description, set_pr_labels }
+      : { get_pr_context, get_diff, post_review, post_inline_comment };
 
-  return { get_pr_context, get_diff, post_review, post_inline_comment };
+  // Same for every provider: what an agent writes is scrubbed of credentials before GitHub sees it.
+  const secrets = deps.redact ?? [];
+  return Object.fromEntries(
+    Object.entries(tools).map(([name, tool]) => [
+      name,
+      { ...tool, execute: (args, context) => tool.execute(redactSecrets(args, secrets), context) },
+    ]),
+  ) as Record<string, SDKCustomTool>;
 }

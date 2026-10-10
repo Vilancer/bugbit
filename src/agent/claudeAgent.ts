@@ -48,10 +48,6 @@ const DENIED_TOOLS = [
   'Read(**/.env*)',
 ];
 
-/** Token shapes that must never leave through a PR comment, description, or label. */
-const TOKEN_PATTERN =
-  /\b(?:sk-ant-[a-z0-9]+-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|crsr_?[A-Za-z0-9]{30,})/g;
-
 /** Env vars the agent subprocess must never see (action inputs carry secrets as INPUT_*). */
 const SCRUBBED_ENV =
   /^(INPUT_|ACTIONS_RUNTIME_TOKEN$|ACTIONS_ID_TOKEN_REQUEST_|GITHUB_TOKEN$|GH_TOKEN$|CURSOR_API_KEY$|ANTHROPIC_API_KEY$|CLAUDE_CODE_OAUTH_TOKEN$)/;
@@ -64,8 +60,6 @@ export interface RunClaudeAgentOptions {
   model?: string;
   systemPromptAppend?: string;
   saveStreamLog?: boolean;
-  /** Extra values to redact from tool arguments (e.g. the GitHub token and its auth header). */
-  redact?: string[];
   /** Skill names visible to the session; [] hides all skills (describe pass). */
   skills?: string[];
   timeoutMs?: number;
@@ -118,34 +112,9 @@ export function zodShapeFromJsonSchema(z: ClaudeZod, schema: JsonSchema): Record
   return shape;
 }
 
-/**
- * Replaces known secrets and token-shaped strings in tool arguments before they reach GitHub.
- * Prompt injection in PR content could get the agent to read a credential; whatever it reads
- * can only leave through bugbit tools, and GitHub masks secrets in logs but not in PR comments.
- */
-export function redactSecrets<T>(value: T, secrets: string[]): T {
-  if (typeof value === 'string') {
-    let text: string = value;
-    for (const secret of secrets) {
-      if (secret) text = text.split(secret).join('[redacted]');
-    }
-    return text.replace(TOKEN_PATTERN, '[redacted]') as T;
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => redactSecrets(item, secrets)) as T;
-  }
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, redactSecrets(item, secrets)]),
-    ) as T;
-  }
-  return value;
-}
-
 export function createBugbitMcpServer(
   sdk: ClaudeAgentSdk,
   customTools: Record<string, SDKCustomTool>,
-  secrets: string[] = [],
 ): unknown {
   const tools = Object.entries(customTools).map(([name, custom]) =>
     sdk.tool(
@@ -154,7 +123,7 @@ export function createBugbitMcpServer(
       zodShapeFromJsonSchema(sdk.z, custom.inputSchema as JsonSchema),
       async (args): Promise<ClaudeMcpToolResult> => {
         try {
-          const result = await custom.execute(redactSecrets(args, secrets) as never, undefined as never);
+          const result = await custom.execute(args as never, undefined as never);
           return { content: [{ type: 'text', text: JSON.stringify(result ?? null) }] };
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -222,8 +191,7 @@ export async function runClaudeAgent(
   customTools: Record<string, SDKCustomTool>,
   options: RunClaudeAgentOptions = {},
 ): Promise<RunClaudeAgentResult> {
-  const secret = auth.kind === 'oauth-token' ? auth.token : auth.key;
-  core.setSecret(secret);
+  core.setSecret(auth.kind === 'oauth-token' ? auth.token : auth.key);
 
   const sdk = await loadClaudeAgentSdk();
   const abortController = new AbortController();
@@ -265,12 +233,7 @@ export async function runClaudeAgent(
         permissionMode: 'dontAsk',
         allowedTools: [...READ_ONLY_TOOLS, ...toolNames],
         disallowedTools: DENIED_TOOLS,
-        mcpServers: {
-          [BUGBIT_MCP_SERVER]: createBugbitMcpServer(sdk, customTools, [
-            secret,
-            ...(options.redact ?? []),
-          ]),
-        },
+        mcpServers: { [BUGBIT_MCP_SERVER]: createBugbitMcpServer(sdk, customTools) },
         hooks: reviewGuardHooks(),
         systemPrompt: { type: 'preset', preset: 'claude_code', append: options.systemPromptAppend },
         stderr: (data: string) => core.debug(`[claude] ${data.trimEnd()}`),

@@ -13,6 +13,12 @@ All notable changes to this project will be documented in this file.
 ### Changed
 
 - `cursor-api-key` is now only required when `provider` is `cursor`. `model` defaults to `composer-2.5` on cursor and to Claude Code's default model on claude.
+- The Cursor agent no longer loads settings, rules or MCP servers from the PR checkout (`settingSources: []`) and runs with Cursor's sandbox on.
+
+### Security
+
+- Everything an agent posts (review comments, PR description, labels) is scrubbed of the GitHub token, its basic-auth header, the provider key and token-shaped strings, on both providers.
+- bugbit removes its credential inputs and the Actions runtime token from the environment before any agent starts; the runtime token comes back only for the stream-log upload.
 
 ## [1.2.0] - 2026-09-11
 

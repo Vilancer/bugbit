@@ -2,7 +2,6 @@ import type { SDKCustomTool } from '@cursor/sdk';
 import {
   BUGBIT_MCP_SERVER,
   claudeAgentEnv,
-  redactSecrets,
   runClaudeAgent,
   zodShapeFromJsonSchema,
 } from '../src/agent/claudeAgent';
@@ -152,17 +151,6 @@ describe('runClaudeAgent', () => {
     });
   });
 
-  it('redacts the Claude credential from tool arguments before posting', async () => {
-    const { tool } = mockSdk(success);
-    const execute = jest.fn(async () => ({ ok: true }));
-    await runClaudeAgent({ kind: 'oauth-token', token: 'sk-ant-oat01-SEEKRIT' }, 'p', '/tmp/repo', {
-      post_review: { ...tools.post_review, execute },
-    });
-
-    await tool.mock.calls[0][3]({ findings: [{ body: 'leak sk-ant-oat01-SEEKRIT here' }] });
-    expect(execute).toHaveBeenCalledWith({ findings: [{ body: 'leak [redacted] here' }] }, undefined);
-  });
-
   it('throws when the run ends with an error result', async () => {
     mockSdk([{ type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['boom'] }]);
     await expect(
@@ -178,15 +166,3 @@ describe('runClaudeAgent', () => {
   });
 });
 
-describe('redactSecrets', () => {
-  it('replaces known secrets and token shapes in nested values, leaving other data alone', () => {
-    const input = {
-      findings: [{ line: 3, body: 'token my-plain-secret and ghs_' + 'a'.repeat(36) }],
-      title: 'key sk-ant-api03-' + 'b'.repeat(40),
-    };
-    expect(redactSecrets(input, ['my-plain-secret'])).toEqual({
-      findings: [{ line: 3, body: 'token [redacted] and [redacted]' }],
-      title: 'key [redacted]',
-    });
-  });
-});

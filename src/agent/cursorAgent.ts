@@ -39,6 +39,9 @@ export async function runAgent(
         cwd,
         customTools,
         autoReview: false,
+        // Never load rules, MCP servers or settings from the PR head checkout.
+        settingSources: [],
+        sandboxOptions: { enabled: true },
       },
     });
 

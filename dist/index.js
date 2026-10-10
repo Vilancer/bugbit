@@ -312,7 +312,6 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.BUGBIT_MCP_SERVER = void 0;
 exports.zodShapeFromJsonSchema = zodShapeFromJsonSchema;
-exports.redactSecrets = redactSecrets;
 exports.createBugbitMcpServer = createBugbitMcpServer;
 exports.claudeAgentEnv = claudeAgentEnv;
 exports.runClaudeAgent = runClaudeAgent;
@@ -356,8 +355,6 @@ const DENIED_TOOLS = [
     'Read(**/.git/config)',
     'Read(**/.env*)',
 ];
-/** Token shapes that must never leave through a PR comment, description, or label. */
-const TOKEN_PATTERN = /\b(?:sk-ant-[a-z0-9]+-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|crsr_?[A-Za-z0-9]{30,})/g;
 /** Env vars the agent subprocess must never see (action inputs carry secrets as INPUT_*). */
 const SCRUBBED_ENV = /^(INPUT_|ACTIONS_RUNTIME_TOKEN$|ACTIONS_ID_TOKEN_REQUEST_|GITHUB_TOKEN$|GH_TOKEN$|CURSOR_API_KEY$|ANTHROPIC_API_KEY$|CLAUDE_CODE_OAUTH_TOKEN$)/;
 function zodFromJsonSchema(z, schema, optional) {
@@ -393,32 +390,10 @@ function zodShapeFromJsonSchema(z, schema) {
     }
     return shape;
 }
-/**
- * Replaces known secrets and token-shaped strings in tool arguments before they reach GitHub.
- * Prompt injection in PR content could get the agent to read a credential; whatever it reads
- * can only leave through bugbit tools, and GitHub masks secrets in logs but not in PR comments.
- */
-function redactSecrets(value, secrets) {
-    if (typeof value === 'string') {
-        let text = value;
-        for (const secret of secrets) {
-            if (secret)
-                text = text.split(secret).join('[redacted]');
-        }
-        return text.replace(TOKEN_PATTERN, '[redacted]');
-    }
-    if (Array.isArray(value)) {
-        return value.map((item) => redactSecrets(item, secrets));
-    }
-    if (value && typeof value === 'object') {
-        return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactSecrets(item, secrets)]));
-    }
-    return value;
-}
-function createBugbitMcpServer(sdk, customTools, secrets = []) {
+function createBugbitMcpServer(sdk, customTools) {
     const tools = Object.entries(customTools).map(([name, custom]) => sdk.tool(name, custom.description ?? name, zodShapeFromJsonSchema(sdk.z, custom.inputSchema), async (args) => {
         try {
-            const result = await custom.execute(redactSecrets(args, secrets), undefined);
+            const result = await custom.execute(args, undefined);
             return { content: [{ type: 'text', text: JSON.stringify(result ?? null) }] };
         }
         catch (error) {
@@ -474,8 +449,7 @@ function logMessage(message) {
     }
 }
 async function runClaudeAgent(auth, prompt, cwd, customTools, options = {}) {
-    const secret = auth.kind === 'oauth-token' ? auth.token : auth.key;
-    core.setSecret(secret);
+    core.setSecret(auth.kind === 'oauth-token' ? auth.token : auth.key);
     const sdk = await (0, claudeSdk_1.loadClaudeAgentSdk)();
     const abortController = new AbortController();
     const timeoutMs = options.timeoutMs ?? runWait_1.AGENT_TIMEOUT_MS;
@@ -511,12 +485,7 @@ async function runClaudeAgent(auth, prompt, cwd, customTools, options = {}) {
                 permissionMode: 'dontAsk',
                 allowedTools: [...READ_ONLY_TOOLS, ...toolNames],
                 disallowedTools: DENIED_TOOLS,
-                mcpServers: {
-                    [exports.BUGBIT_MCP_SERVER]: createBugbitMcpServer(sdk, customTools, [
-                        secret,
-                        ...(options.redact ?? []),
-                    ]),
-                },
+                mcpServers: { [exports.BUGBIT_MCP_SERVER]: createBugbitMcpServer(sdk, customTools) },
                 hooks: (0, claudeGuard_1.reviewGuardHooks)(),
                 systemPrompt: { type: 'preset', preset: 'claude_code', append: options.systemPromptAppend },
                 stderr: (data) => core.debug(`[claude] ${data.trimEnd()}`),
@@ -770,6 +739,9 @@ async function runAgent(apiKey, model, prompt, cwd, customTools, options = {}) {
                     cwd,
                     customTools,
                     autoReview: false,
+                    // Never load rules, MCP servers or settings from the PR head checkout.
+                    settingSources: [],
+                    sandboxOptions: { enabled: true },
                 },
             }), true);
             const run = await agent.send(prompt);
@@ -1099,6 +1071,46 @@ exports.StreamLogger = StreamLogger;
 
 /***/ }),
 
+/***/ 68954:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.redactSecrets = redactSecrets;
+exports.githubTokenForms = githubTokenForms;
+/** Token shapes that must never leave through a PR comment, description, or label. */
+const TOKEN_PATTERN = /\b(?:sk-ant-[a-z0-9]+-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|crsr_?[A-Za-z0-9]{30,})/g;
+/**
+ * Replaces known secrets and token-shaped strings in tool arguments before they reach GitHub.
+ * Prompt injection in PR content could get either agent to read a credential; whatever it reads
+ * can only leave through bugbit tools, and GitHub masks secrets in logs but not in PR comments.
+ */
+function redactSecrets(value, secrets) {
+    if (typeof value === 'string') {
+        let text = value;
+        for (const secret of secrets) {
+            if (secret)
+                text = text.split(secret).join('[redacted]');
+        }
+        return text.replace(TOKEN_PATTERN, '[redacted]');
+    }
+    if (Array.isArray(value)) {
+        return value.map((item) => redactSecrets(item, secrets));
+    }
+    if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactSecrets(item, secrets)]));
+    }
+    return value;
+}
+/** Every form of the GitHub token an agent could find: raw, and the basic-auth header checkout persists. */
+function githubTokenForms(token) {
+    return token ? [token, Buffer.from(`x-access-token:${token}`).toString('base64')] : [];
+}
+
+
+/***/ }),
+
 /***/ 6900:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -1148,6 +1160,7 @@ const fs = __importStar(__nccwpck_require__(79896));
 const path = __importStar(__nccwpck_require__(16928));
 const url_1 = __nccwpck_require__(87016);
 const dynamicImport_1 = __nccwpck_require__(72264);
+const redact_1 = __nccwpck_require__(68954);
 const resolveActionModule_1 = __nccwpck_require__(34210);
 const opsPromises = new Map();
 const preflightPromises = new Map();
@@ -1369,10 +1382,15 @@ function createBugbitTools(deps, pass = 'review') {
             return result;
         },
     };
-    if (pass === 'describe') {
-        return { get_pr_context, get_diff, update_pr_description, set_pr_labels };
-    }
-    return { get_pr_context, get_diff, post_review, post_inline_comment };
+    const tools = pass === 'describe'
+        ? { get_pr_context, get_diff, update_pr_description, set_pr_labels }
+        : { get_pr_context, get_diff, post_review, post_inline_comment };
+    // Same for every provider: what an agent writes is scrubbed of credentials before GitHub sees it.
+    const secrets = deps.redact ?? [];
+    return Object.fromEntries(Object.entries(tools).map(([name, tool]) => [
+        name,
+        { ...tool, execute: (args, context) => tool.execute((0, redact_1.redactSecrets)(args, secrets), context) },
+    ]));
 }
 
 
@@ -1428,6 +1446,8 @@ const reviewModes_1 = __nccwpck_require__(42263);
 const tools_1 = __nccwpck_require__(6900);
 const prepareBaseRef_1 = __nccwpck_require__(69081);
 const provider_1 = __nccwpck_require__(84667);
+const secretEnv_1 = __nccwpck_require__(64863);
+const redact_1 = __nccwpck_require__(68954);
 const resolveEvent_1 = __nccwpck_require__(95714);
 const sdkBootstrap_1 = __nccwpck_require__(88500);
 const AUTO_DESCRIBE_START = '<!-- bugbit-auto-describe:start -->';
@@ -1480,6 +1500,14 @@ async function run() {
             core.warning('auto-describe infers PR labels — consumer job must include permissions: issues: write and pull-requests: write');
         }
         const prNumber = core.getInput('pr-number');
+        // All inputs are read; agents must not find credentials in the environment.
+        const withActionsRuntime = (0, secretEnv_1.scrubSecretEnv)();
+        const secrets = [
+            ...(0, redact_1.githubTokenForms)(githubToken),
+            apiKey,
+            claudeAuth?.kind === 'oauth-token' ? claudeAuth.token : (claudeAuth?.key ?? ''),
+        ].filter(Boolean);
+        secrets.forEach((secret) => core.setSecret(secret));
         const rawEventPath = process.env.GITHUB_EVENT_PATH ?? '';
         const repository = process.env.GITHUB_REPOSITORY ?? '';
         const eventPath = await (0, resolveEvent_1.resolveEvent)({
@@ -1504,6 +1532,7 @@ async function run() {
             cleanSummaryBody,
             autoDescribe,
             describeLabels,
+            redact: secrets,
         };
         if (saveStreamLog) {
             core.info('save-stream-log enabled — consumer workflow must include actions: write');
@@ -1545,8 +1574,6 @@ async function run() {
                 const result = await (0, claudeAgent_1.runClaudeAgent)(claudeAuth, prompt, cwd, tools, {
                     model,
                     saveStreamLog: saveLog,
-                    // actions/checkout@v4 persists the token in .git/config as a basic-auth header.
-                    redact: [githubToken, Buffer.from(`x-access-token:${githubToken}`).toString('base64')],
                     ...claudeOptions,
                 });
                 core.info(`${label} pass completed: session ${result.runId}`);
@@ -1569,7 +1596,7 @@ async function run() {
                     githubRunId: process.env.GITHUB_RUN_ID,
                 });
                 core.info(`Uploading stream log artifact "${artifactName}" from ${streamLogPath}…`);
-                const uploadResponse = await (0, artifactUpload_1.uploadStreamLogArtifact)(artifactName, streamLogPath);
+                const uploadResponse = await withActionsRuntime(() => (0, artifactUpload_1.uploadStreamLogArtifact)(artifactName, streamLogPath));
                 core.info(`Uploaded stream log artifact "${artifactName}" (id: ${uploadResponse.id ?? 'unknown'})`);
             }
             catch (error) {
@@ -2665,6 +2692,51 @@ function bootstrapRipgrep(bundleDir = __dirname) {
     }
     core.warning('ripgrep (rg) not found; Cursor SDK ignore-aware file search may be degraded. ' +
         'Install ripgrep on the runner or set CURSOR_RIPGREP_PATH.');
+}
+
+
+/***/ }),
+
+/***/ 64863:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.scrubSecretEnv = scrubSecretEnv;
+/** Action inputs that carry credentials; GitHub exposes each input as INPUT_<NAME> in the env. */
+const SECRET_INPUTS = ['github-token', 'cursor-api-key', 'claude-code-oauth-token', 'anthropic-api-key'];
+/** Actions runtime credentials only the artifact upload needs. */
+const RUNTIME_VARS = ['ACTIONS_RUNTIME_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL'];
+function inputEnvName(name) {
+    return `INPUT_${name.replace(/ /g, '_').toUpperCase()}`;
+}
+/**
+ * Removes credentials from process.env after bugbit has read its inputs, so agents (the Cursor SDK
+ * runs tools with this process's env) can't read them. Returns a helper that puts the Actions
+ * runtime token back only for the duration of an artifact upload.
+ */
+function scrubSecretEnv(env = process.env) {
+    for (const name of SECRET_INPUTS) {
+        delete env[inputEnvName(name)];
+    }
+    const runtime = {};
+    for (const name of RUNTIME_VARS) {
+        if (env[name] !== undefined) {
+            runtime[name] = env[name];
+            delete env[name];
+        }
+    }
+    return async (fn) => {
+        Object.assign(env, runtime);
+        try {
+            return await fn();
+        }
+        finally {
+            for (const name of Object.keys(runtime))
+                delete env[name];
+        }
+    };
 }
 
 

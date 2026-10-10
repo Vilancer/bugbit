@@ -284,8 +284,21 @@ How the session is locked down:
 - Read-only: `permissionMode: dontAsk` with an allowlist (`Read`, `Grep`, `Glob`, `Skill`, subagents, bugbit's tools). `Edit`, `Write`, `WebFetch`, and `WebSearch` are denied, and the skills' `--fix`/`--comment` paths are disabled by the overlay.
 - A guard checks every Bash and file call, including subagents': Bash may only run one plain read-only `git` command (`diff`, `log`, `show`, `blame`, `status`, `rev-parse`, `ls-files`, `merge-base`, no `--output`/`--no-index`, no pipes or chaining), and `Read`/`Grep`/`Glob` can't open `.git/config`, `.env*`, keys, `/proc` or `$RUNNER_TEMP`.
 - Ignores everything the PR head could control: no `.claude/settings.json`, hooks, `.mcp.json`, or plugins are loaded (`settingSources: []`, `strictMcpConfig`). The token account's claude.ai connectors and synced skills/plugins are off.
-- The agent process gets the Claude token only; `INPUT_*`, `GITHUB_TOKEN`, and Actions runtime tokens are stripped from its environment. PR comments go through bugbit's in-process MCP tools, which redact the Claude credential, the GitHub token and anything token-shaped before posting (GitHub masks secrets in logs, not in comments).
+- The agent process gets the Claude token only; `INPUT_*`, `GITHUB_TOKEN`, and Actions runtime tokens are stripped from its environment. PR comments go through bugbit's in-process MCP tools.
 - The SDK (`@anthropic-ai/claude-agent-sdk`, pinned) is installed into `$RUNNER_TEMP` on each run (~10–30s, ~250MB native binary) because it cannot be bundled into `dist/`.
+
+## What each provider is allowed to do
+
+| | Claude (`provider: claude`) | Cursor (`provider: cursor`) |
+|---|---|---|
+| File edits | Blocked | Asked not to; the Cursor SDK has no per-tool deny rules |
+| Shell | One plain read-only `git` command, arguments checked | Cursor's sandbox (`sandboxOptions.enabled`); commands aren't checked one by one |
+| `.git/config`, `.env*`, keys, `/proc` | Refused | Readable inside the sandbox |
+| Settings, rules, MCP servers from the PR branch | Never loaded | Never loaded (`settingSources: []`) |
+| Credentials in the agent's environment | Claude credential only | None: bugbit removes its secret inputs and the Actions runtime token from the environment before any agent starts |
+| What gets posted (comments, description, labels) | Scrubbed of credentials | Scrubbed of credentials |
+
+Scrubbing is the backstop for both: before anything reaches GitHub, bugbit replaces the GitHub token (and the basic-auth header `actions/checkout` stores), the provider key, and anything token-shaped with `[redacted]`. GitHub masks secrets in logs, but not in PR comments.
 
 # Recommended permissions
 

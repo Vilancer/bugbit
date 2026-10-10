@@ -27,6 +27,8 @@ import {
 import type { PrefetchedPrData } from './github/types';
 import { prepareBaseRef, readPullRequestRefs } from './runtime/prepareBaseRef';
 import { parseProvider, resolveClaudeAuth } from './runtime/provider';
+import { scrubSecretEnv } from './runtime/secretEnv';
+import { githubTokenForms } from './github/redact';
 import { resolveEvent } from './runtime/resolveEvent';
 import { bootstrapRipgrep } from './runtime/sdkBootstrap';
 
@@ -96,6 +98,14 @@ async function run(): Promise<void> {
     }
 
     const prNumber = core.getInput('pr-number');
+    // All inputs are read; agents must not find credentials in the environment.
+    const withActionsRuntime = scrubSecretEnv();
+    const secrets = [
+      ...githubTokenForms(githubToken),
+      apiKey,
+      claudeAuth?.kind === 'oauth-token' ? claudeAuth.token : (claudeAuth?.key ?? ''),
+    ].filter(Boolean);
+    secrets.forEach((secret) => core.setSecret(secret));
     const rawEventPath = process.env.GITHUB_EVENT_PATH ?? '';
     const repository = process.env.GITHUB_REPOSITORY ?? '';
 
@@ -126,6 +136,7 @@ async function run(): Promise<void> {
       cleanSummaryBody,
       autoDescribe,
       describeLabels,
+      redact: secrets,
     };
 
     if (saveStreamLog) {
@@ -186,8 +197,6 @@ async function run(): Promise<void> {
         const result = await runClaudeAgent(claudeAuth, prompt, cwd, tools, {
           model,
           saveStreamLog: saveLog,
-          // actions/checkout@v4 persists the token in .git/config as a basic-auth header.
-          redact: [githubToken, Buffer.from(`x-access-token:${githubToken}`).toString('base64')],
           ...claudeOptions,
         });
         core.info(`${label} pass completed: session ${result.runId}`);
@@ -215,7 +224,9 @@ async function run(): Promise<void> {
           githubRunId: process.env.GITHUB_RUN_ID,
         });
         core.info(`Uploading stream log artifact "${artifactName}" from ${streamLogPath}…`);
-        const uploadResponse = await uploadStreamLogArtifact(artifactName, streamLogPath);
+        const uploadResponse = await withActionsRuntime(() =>
+          uploadStreamLogArtifact(artifactName, streamLogPath),
+        );
         core.info(
           `Uploaded stream log artifact "${artifactName}" (id: ${uploadResponse.id ?? 'unknown'})`,
         );
