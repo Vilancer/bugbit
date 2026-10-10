@@ -1,6 +1,6 @@
 name: 'vilancer-bugbit'
 description: >
-  Review pull requests using your own Cursor agent. Supports pull_request
+  Review pull requests using your own Cursor or Claude Code agent. Supports pull_request
   (recommended) and workflow_dispatch triggers; see pr-number for manual runs.
 author: 'vilancer'
 branding:
@@ -8,17 +8,42 @@ branding:
   color: 'green'
 
 inputs:
-  cursor-api-key:
-    description: 'Cursor API key (pass as a secret)'
-    required: true
-  model:
-    description: 'Cursor model id to use, e.g. composer-2.5'
+  provider:
+    description: >
+      Agent runtime: cursor (default) or claude. claude runs the Claude Code
+      built-in skills (/code-review, /security-review, /simplify) through the
+      Claude Agent SDK and needs claude-code-oauth-token or anthropic-api-key.
     required: false
-    default: 'composer-2.5'
+    default: 'cursor'
+  cursor-api-key:
+    description: 'Cursor API key (pass as a secret). Required when provider is cursor.'
+    required: false
+  claude-code-oauth-token:
+    description: >
+      Long-lived Claude subscription token from `claude setup-token` (pass as a
+      secret). Used when provider is claude; takes precedence over anthropic-api-key.
+    required: false
+  anthropic-api-key:
+    description: 'Anthropic API key (pass as a secret). Alternative to claude-code-oauth-token for provider claude.'
+    required: false
+  model:
+    description: >
+      Model id. Defaults to composer-2.5 for cursor; for claude, empty uses
+      Claude Code's default model (e.g. set claude-opus-5-5 or claude-sonnet-5-5).
+    required: false
+    default: ''
+  review-level:
+    description: >
+      provider claude only: /code-review effort level, one of low, medium,
+      high, xhigh, max (few high-confidence findings up to many, some uncertain).
+      Empty uses the skill's default.
+    required: false
+    default: ''
   review-modes:
     description: >
-      Comma-separated list of review modes to run. Each mode maps to a
-      Cursor built-in skill (/review-bugbot, /review-security, /simplify).
+      Comma-separated list of review modes to run. On cursor each mode maps to a
+      Cursor built-in skill (/review-bugbot, /review-security, /simplify); on
+      claude to a Claude Code skill (/code-review, /security-review, /simplify).
       Output is read-only: findings posted as inline PR comments.
       Any of: code-review (alias review-bugbot / bugbot), security-review
       (alias review-security), simplify. code-review invokes /review-bugbot.

@@ -271,6 +271,256 @@ webpackContext.id = 83595;
 
 /***/ }),
 
+/***/ 8422:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.BUGBIT_MCP_SERVER = void 0;
+exports.zodShapeFromJsonSchema = zodShapeFromJsonSchema;
+exports.createBugbitMcpServer = createBugbitMcpServer;
+exports.claudeAgentEnv = claudeAgentEnv;
+exports.runClaudeAgent = runClaudeAgent;
+const core = __importStar(__nccwpck_require__(39910));
+const fs = __importStar(__nccwpck_require__(73024));
+const os = __importStar(__nccwpck_require__(48161));
+const path = __importStar(__nccwpck_require__(76760));
+const claudeSdk_1 = __nccwpck_require__(4698);
+const runWait_1 = __nccwpck_require__(45353);
+exports.BUGBIT_MCP_SERVER = 'bugbit';
+/** Read-only tools the review agent may use without prompting (dontAsk denies everything else). */
+const READ_ONLY_TOOLS = [
+    'Read',
+    'Grep',
+    'Glob',
+    'LS',
+    'Skill',
+    'Agent',
+    'Task',
+    'TodoWrite',
+    'Bash(git diff:*)',
+    'Bash(git log:*)',
+    'Bash(git show:*)',
+    'Bash(git blame:*)',
+    'Bash(git status:*)',
+    'Bash(git rev-parse:*)',
+    'Bash(git ls-files:*)',
+];
+const MUTATING_TOOLS = ['Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'WebFetch', 'WebSearch'];
+/** Env vars the agent subprocess must never see (action inputs carry secrets as INPUT_*). */
+const SCRUBBED_ENV = /^(INPUT_|ACTIONS_RUNTIME_TOKEN$|ACTIONS_ID_TOKEN_REQUEST_|GITHUB_TOKEN$|GH_TOKEN$|CURSOR_API_KEY$)/;
+function zodFromJsonSchema(z, schema, optional) {
+    let result;
+    switch (schema.type) {
+        case 'string':
+            result = z.string();
+            break;
+        case 'number':
+        case 'integer':
+            result = z.number();
+            break;
+        case 'boolean':
+            result = z.boolean();
+            break;
+        case 'array':
+            result = z.array(zodFromJsonSchema(z, schema.items ?? {}, false));
+            break;
+        case 'object':
+            result = z.object(zodShapeFromJsonSchema(z, schema));
+            break;
+        default:
+            result = z.unknown();
+    }
+    return optional ? result.optional() : result;
+}
+/** Converts the flat JSON schemas bugbit tools declare into the zod raw shape the SDK `tool()` expects. */
+function zodShapeFromJsonSchema(z, schema) {
+    const required = new Set(schema.required ?? []);
+    const shape = {};
+    for (const [key, value] of Object.entries(schema.properties ?? {})) {
+        shape[key] = zodFromJsonSchema(z, value, !required.has(key));
+    }
+    return shape;
+}
+function createBugbitMcpServer(sdk, customTools) {
+    const tools = Object.entries(customTools).map(([name, custom]) => sdk.tool(name, custom.description ?? name, zodShapeFromJsonSchema(sdk.z, custom.inputSchema), async (args) => {
+        try {
+            const result = await custom.execute(args, undefined);
+            return { content: [{ type: 'text', text: JSON.stringify(result ?? null) }] };
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            core.warning(`[bugbit] ${name} failed: ${message}`);
+            return { content: [{ type: 'text', text: message }], isError: true };
+        }
+    }, 
+    // Keep bugbit tools in context instead of deferring them behind ToolSearch.
+    { alwaysLoad: true }));
+    return sdk.createSdkMcpServer({ name: exports.BUGBIT_MCP_SERVER, version: '1.0.0', tools });
+}
+function claudeAgentEnv(auth, source = process.env) {
+    const env = {};
+    for (const [key, value] of Object.entries(source)) {
+        if (value === undefined || SCRUBBED_ENV.test(key))
+            continue;
+        if (key === 'ANTHROPIC_API_KEY' || key === 'CLAUDE_CODE_OAUTH_TOKEN')
+            continue;
+        env[key] = value;
+    }
+    if (auth.kind === 'oauth-token') {
+        env.CLAUDE_CODE_OAUTH_TOKEN = auth.token;
+    }
+    else {
+        env.ANTHROPIC_API_KEY = auth.key;
+    }
+    return env;
+}
+function logMessage(message) {
+    switch (message.type) {
+        case 'system':
+            if (message.subtype === 'init') {
+                core.info(`[init] model=${String(message.model ?? 'unknown')}`);
+            }
+            break;
+        case 'assistant': {
+            const content = message.message?.content ?? [];
+            for (const block of content) {
+                if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
+                    core.info(block.text.trim());
+                }
+                else if (block.type === 'tool_use') {
+                    core.info(`[tool] ${String(block.name)}`);
+                }
+            }
+            break;
+        }
+        case 'result': {
+            const usage = message.usage;
+            core.info(`[result] ${String(message.subtype)} turns=${String(message.num_turns ?? '?')} ` +
+                `input=${usage?.input_tokens ?? 0} output=${usage?.output_tokens ?? 0}`);
+            break;
+        }
+    }
+}
+async function runClaudeAgent(auth, prompt, cwd, customTools, options = {}) {
+    core.setSecret(auth.kind === 'oauth-token' ? auth.token : auth.key);
+    const sdk = await (0, claudeSdk_1.loadClaudeAgentSdk)();
+    const abortController = new AbortController();
+    const timeoutMs = options.timeoutMs ?? runWait_1.AGENT_TIMEOUT_MS;
+    let timedOut = false;
+    const timer = setTimeout(() => {
+        timedOut = true;
+        abortController.abort();
+    }, timeoutMs);
+    const toolNames = Object.keys(customTools).map((name) => `mcp__${exports.BUGBIT_MCP_SERVER}__${name}`);
+    let streamLog;
+    let streamLogPath;
+    let runId = 'unknown';
+    try {
+        const run = sdk.query({
+            prompt,
+            options: {
+                cwd,
+                model: options.model || undefined,
+                abortController,
+                env: claudeAgentEnv(auth),
+                // Never load settings, hooks, or CLAUDE.md-driven config from the PR head checkout,
+                // nor the token account's claude.ai connectors, synced skills, or plugins.
+                settingSources: [],
+                strictMcpConfig: true,
+                settings: {
+                    disableClaudeAiConnectors: true,
+                    syncClaudeAiSkills: false,
+                    syncClaudeAiPlugins: false,
+                },
+                skills: options.skills ?? 'all',
+                permissionMode: 'dontAsk',
+                allowedTools: [...READ_ONLY_TOOLS, ...toolNames],
+                disallowedTools: MUTATING_TOOLS,
+                mcpServers: { [exports.BUGBIT_MCP_SERVER]: createBugbitMcpServer(sdk, customTools) },
+                systemPrompt: options.systemPromptAppend
+                    ? { type: 'preset', preset: 'claude_code', append: options.systemPromptAppend }
+                    : { type: 'preset', preset: 'claude_code' },
+                stderr: (data) => core.debug(`[claude] ${data.trimEnd()}`),
+            },
+        });
+        let result;
+        for await (const message of run) {
+            if (message.type === 'system' && message.subtype === 'init' && message.session_id) {
+                runId = String(message.session_id);
+                core.info(`Started Claude session ${runId}`);
+                if (options.saveStreamLog) {
+                    streamLogPath = path.join(process.env.RUNNER_TEMP ?? os.tmpdir(), `bugbit-stream-${runId}.jsonl`);
+                    streamLog = fs.createWriteStream(streamLogPath, { flags: 'a' });
+                }
+            }
+            streamLog?.write(`${JSON.stringify(message)}\n`);
+            logMessage(message);
+            if (message.type === 'result') {
+                result = message;
+            }
+        }
+        if (!result) {
+            throw new Error('Claude agent ended without a result message');
+        }
+        if (result.subtype !== 'success' || result.is_error) {
+            const detail = Array.isArray(result.errors) ? `: ${result.errors.join('; ')}` : '';
+            throw new Error(`Claude agent run failed (${String(result.subtype)})${detail}`);
+        }
+        core.info('Run completed with status=success');
+        return { runId, streamLogPath };
+    }
+    catch (error) {
+        if (timedOut) {
+            throw new Error(runWait_1.AGENT_TIMEOUT_MESSAGE);
+        }
+        throw error;
+    }
+    finally {
+        clearTimeout(timer);
+        if (streamLog) {
+            await new Promise((resolve) => streamLog.end(() => resolve()));
+        }
+    }
+}
+
+
+/***/ }),
+
 /***/ 76486:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -1034,11 +1284,13 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __importStar(__nccwpck_require__(39910));
 const path = __importStar(__nccwpck_require__(16928));
 const cursorAgent_1 = __nccwpck_require__(76486);
+const claudeAgent_1 = __nccwpck_require__(8422);
 const artifactUpload_1 = __nccwpck_require__(16625);
 const actionPath_1 = __nccwpck_require__(56063);
 const checkCheckout_1 = __nccwpck_require__(14944);
 const reviewModes_1 = __nccwpck_require__(42263);
 const tools_1 = __nccwpck_require__(6900);
+const provider_1 = __nccwpck_require__(84667);
 const resolveEvent_1 = __nccwpck_require__(95714);
 const sdkBootstrap_1 = __nccwpck_require__(88500);
 const AUTO_DESCRIBE_START = '<!-- bugbit-auto-describe:start -->';
@@ -1059,10 +1311,22 @@ async function run() {
         (0, sdkBootstrap_1.bootstrapRipgrep)();
         const cwd = process.cwd();
         (0, checkCheckout_1.assertRepoCheckedOut)(cwd);
-        const apiKey = core.getInput('cursor-api-key', { required: true });
+        const provider = (0, provider_1.parseProvider)(core.getInput('provider'));
+        const apiKey = provider === 'cursor' ? core.getInput('cursor-api-key') : '';
+        if (provider === 'cursor' && !apiKey) {
+            throw new Error('provider: cursor needs the cursor-api-key input.');
+        }
+        const claudeAuth = provider === 'claude'
+            ? (0, provider_1.resolveClaudeAuth)(core.getInput('claude-code-oauth-token'), core.getInput('anthropic-api-key'))
+            : undefined;
         const githubToken = core.getInput('github-token', { required: true });
         core.setSecret(githubToken);
-        const model = core.getInput('model') || 'composer-2.5';
+        // Empty model on claude means Claude Code's default model for the account.
+        const model = core.getInput('model') || (provider === 'cursor' ? 'composer-2.5' : '');
+        const reviewLevel = (0, reviewModes_1.parseReviewLevel)(core.getInput('review-level'));
+        if (reviewLevel && provider === 'cursor') {
+            core.warning('review-level only applies to provider: claude (/code-review levels); ignoring it.');
+        }
         const modesInput = core.getInput('review-modes');
         const saveStreamLog = core.getBooleanInput('save-stream-log');
         const postCleanSummaryInput = core.getInput('post-clean-summary');
@@ -1138,7 +1402,17 @@ async function run() {
                 'Set auto-describe to true and/or provide at least one review-modes value.');
             return;
         }
-        async function runPass(label, prompt, tools, saveLog) {
+        async function runPass(label, prompt, tools, saveLog, claudeOptions = {}) {
+            if (claudeAuth) {
+                core.info(`Starting Claude agent (model: ${model || 'default'}, pass: ${label})`);
+                const result = await (0, claudeAgent_1.runClaudeAgent)(claudeAuth, prompt, cwd, tools, {
+                    model,
+                    saveStreamLog: saveLog,
+                    ...claudeOptions,
+                });
+                core.info(`${label} pass completed: session ${result.runId}`);
+                return result;
+            }
             core.info(`Starting Cursor agent (model: ${model}, pass: ${label})`);
             const result = await (0, cursorAgent_1.runAgent)(apiKey, model, prompt, cwd, tools, {
                 saveStreamLog: saveLog,
@@ -1170,12 +1444,22 @@ async function run() {
         }
         if (runDescribe) {
             const { prompt: describePrompt } = (0, reviewModes_1.buildDescribePrompt)(promptsDir, actionPath, prefetched, describeLabels);
-            const describeRun = await runPass('describe', describePrompt, (0, tools_1.createBugbitTools)(toolDeps, 'describe'), saveStreamLog);
+            const describeRun = await runPass('describe', describePrompt, (0, tools_1.createBugbitTools)(toolDeps, 'describe'), saveStreamLog, { skills: [] });
             await uploadStreamLog(describeRun.streamLogPath, describeRun.runId, !runReview);
         }
         if (runReview) {
-            const { prompt: reviewPrompt } = (0, reviewModes_1.buildSkillPrompt)(reviewModes.join(','), promptsDir, actionPath, prefetched);
-            const reviewRun = await runPass('review', reviewPrompt, (0, tools_1.createBugbitTools)(toolDeps, 'review'), saveStreamLog);
+            const reviewTools = (0, tools_1.createBugbitTools)(toolDeps, 'review');
+            let reviewRun;
+            if (provider === 'claude') {
+                const { prompt, systemPromptAppend } = (0, reviewModes_1.buildClaudeSkillPrompt)(reviewModes.join(','), promptsDir, actionPath, prefetched, reviewLevel);
+                reviewRun = await runPass('review', prompt, reviewTools, saveStreamLog, {
+                    systemPromptAppend,
+                });
+            }
+            else {
+                const { prompt } = (0, reviewModes_1.buildSkillPrompt)(reviewModes.join(','), promptsDir, actionPath, prefetched);
+                reviewRun = await runPass('review', prompt, reviewTools, saveStreamLog);
+            }
             await uploadStreamLog(reviewRun.streamLogPath, reviewRun.runId, true);
         }
     }
@@ -1227,10 +1511,12 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.SKILL_BY_MODE = exports.ALLOWED_MODES = void 0;
+exports.REVIEW_LEVELS = exports.CLAUDE_SKILL_BY_MODE = exports.SKILL_BY_MODE = exports.ALLOWED_MODES = void 0;
+exports.parseReviewLevel = parseReviewLevel;
 exports.parseReviewModes = parseReviewModes;
 exports.validateReviewModes = validateReviewModes;
 exports.buildSkillPrompt = buildSkillPrompt;
+exports.buildClaudeSkillPrompt = buildClaudeSkillPrompt;
 exports.buildDescribePrompt = buildDescribePrompt;
 const fs = __importStar(__nccwpck_require__(79896));
 const path = __importStar(__nccwpck_require__(16928));
@@ -1240,6 +1526,24 @@ exports.SKILL_BY_MODE = {
     'security-review': '/review-security',
     simplify: '/simplify',
 };
+/** Claude Code built-in skills invoked by the claude provider (via the Skill tool). */
+exports.CLAUDE_SKILL_BY_MODE = {
+    'code-review': 'code-review',
+    'security-review': 'security-review',
+    simplify: 'simplify',
+};
+exports.REVIEW_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+/** Parses the review-level input; empty means "let /code-review use its default". */
+function parseReviewLevel(input) {
+    const level = input.trim().toLowerCase();
+    if (!level) {
+        return undefined;
+    }
+    if (!exports.REVIEW_LEVELS.includes(level)) {
+        throw new Error(`Unknown review-level: ${input}. Allowed: ${exports.REVIEW_LEVELS.join(', ')}`);
+    }
+    return level;
+}
 const MODE_ALIASES = {
     'code-review': 'code-review',
     'review-bugbot': 'code-review',
@@ -1310,6 +1614,30 @@ function buildSkillPrompt(modesInput, promptsDir, actionPath, prefetched) {
     const systemPrompt = loadSystemPrompt(promptsDir, actionPath);
     return {
         prompt: `${skillLines}\n\n${systemPrompt}${buildPrefetchedSection(prefetched)}`,
+        modes,
+    };
+}
+function buildClaudeSkillPrompt(modesInput, promptsDir, actionPath, prefetched, level) {
+    const modes = parseReviewModes(modesInput);
+    validateReviewModes(modes);
+    const skillLines = modes.map((mode, index) => {
+        const skill = exports.CLAUDE_SKILL_BY_MODE[mode];
+        const args = mode === 'code-review' && level ? ` with args "${level}"` : '';
+        return `${index + 1}. Invoke the \`${skill}\` skill${args} (findings use mode "${mode}").`;
+    });
+    const systemPath = path.join(promptsDir, 'claude-system.md');
+    const systemPromptAppend = fs
+        .readFileSync(systemPath, 'utf-8')
+        .replaceAll('{{GITHUB_ACTION_PATH}}', actionPath);
+    const prompt = [
+        'Review this pull request by running these Claude Code skills with the Skill tool, in order:',
+        ...skillLines,
+        '',
+        'Collect every finding across all skills, then call post_review exactly once with all of them (empty findings array if none).',
+    ].join('\n');
+    return {
+        prompt: `${prompt}${buildPrefetchedSection(prefetched)}`,
+        systemPromptAppend,
         modes,
     };
 }
@@ -1562,6 +1890,108 @@ function assertRepoCheckedOut(cwd) {
 
 /***/ }),
 
+/***/ 4698:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.CLAUDE_AGENT_SDK_VERSION = void 0;
+exports.claudeSdkInstallDir = claudeSdkInstallDir;
+exports.installClaudeAgentSdk = installClaudeAgentSdk;
+exports.loadClaudeAgentSdk = loadClaudeAgentSdk;
+const node_child_process_1 = __nccwpck_require__(31421);
+const fs = __importStar(__nccwpck_require__(73024));
+const os = __importStar(__nccwpck_require__(48161));
+const path = __importStar(__nccwpck_require__(76760));
+const node_url_1 = __nccwpck_require__(73136);
+const core = __importStar(__nccwpck_require__(39910));
+const dynamicImport_1 = __nccwpck_require__(72264);
+/**
+ * Pinned Claude Agent SDK. It is installed on the runner at run time instead of
+ * bundled: the package is ESM-only and ships a ~250MB native Claude Code binary
+ * per platform, which ncc cannot (and should not) inline into dist/index.js.
+ */
+exports.CLAUDE_AGENT_SDK_VERSION = '0.3.296';
+const PEER_PACKAGES = ['zod@4.6.5', '@modelcontextprotocol/sdk@1.32.1', '@anthropic-ai/sdk@0.133.0'];
+/** Re-exports the SDK and zod from one ESM graph so tool schemas share the SDK's zod instance. */
+const ENTRY_SOURCE = [
+    "export { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';",
+    "export { z } from 'zod';",
+    '',
+].join('\n');
+function claudeSdkInstallDir() {
+    return path.join(process.env.RUNNER_TEMP ?? os.tmpdir(), `bugbit-claude-agent-sdk-${exports.CLAUDE_AGENT_SDK_VERSION}`);
+}
+function installClaudeAgentSdk(installDir = claudeSdkInstallDir()) {
+    const entryPath = path.join(installDir, 'bugbit-entry.mjs');
+    const sdkPackageJson = path.join(installDir, 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'package.json');
+    if (!fs.existsSync(sdkPackageJson)) {
+        core.info(`Installing @anthropic-ai/claude-agent-sdk@${exports.CLAUDE_AGENT_SDK_VERSION} into ${installDir}…`);
+        fs.mkdirSync(installDir, { recursive: true });
+        fs.writeFileSync(path.join(installDir, 'package.json'), JSON.stringify({ name: 'bugbit-claude-runtime', private: true, type: 'module' }));
+        (0, node_child_process_1.execFileSync)('npm', [
+            'install',
+            '--no-audit',
+            '--no-fund',
+            '--no-package-lock',
+            '--loglevel=error',
+            `@anthropic-ai/claude-agent-sdk@${exports.CLAUDE_AGENT_SDK_VERSION}`,
+            ...PEER_PACKAGES,
+        ], { cwd: installDir, stdio: 'inherit' });
+    }
+    fs.writeFileSync(entryPath, ENTRY_SOURCE);
+    return entryPath;
+}
+let sdkPromise;
+function loadClaudeAgentSdk() {
+    if (!sdkPromise) {
+        sdkPromise = Promise.resolve()
+            .then(() => installClaudeAgentSdk())
+            .then((entryPath) => (0, dynamicImport_1.dynamicImport)((0, node_url_1.pathToFileURL)(entryPath).href));
+        sdkPromise.catch(() => {
+            sdkPromise = undefined;
+        });
+    }
+    return sdkPromise;
+}
+
+
+/***/ }),
+
 /***/ 72264:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -1576,6 +2006,35 @@ exports.dynamicImport = dynamicImport;
 function dynamicImport(specifier) {
     const importFn = new Function('specifier', 'return import(specifier)');
     return importFn(specifier);
+}
+
+
+/***/ }),
+
+/***/ 84667:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseProvider = parseProvider;
+exports.resolveClaudeAuth = resolveClaudeAuth;
+function parseProvider(input) {
+    const provider = (input || 'cursor').trim().toLowerCase();
+    if (provider === 'cursor' || provider === 'claude') {
+        return provider;
+    }
+    throw new Error(`Unknown provider: ${input}. Allowed: cursor, claude`);
+}
+/** claude-code-oauth-token (from `claude setup-token`) wins over anthropic-api-key. */
+function resolveClaudeAuth(oauthToken, apiKey) {
+    if (oauthToken) {
+        return { kind: 'oauth-token', token: oauthToken };
+    }
+    if (apiKey) {
+        return { kind: 'api-key', key: apiKey };
+    }
+    throw new Error('provider: claude needs claude-code-oauth-token (run `claude setup-token`) or anthropic-api-key.');
 }
 
 
