@@ -1,7 +1,5 @@
 name: 'vilancer-bugbit'
-description: >
-  Review pull requests using your own Cursor or Claude Code agent. Supports pull_request
-  (recommended) and workflow_dispatch triggers; see pr-number for manual runs.
+description: 'Review pull requests with your own Cursor or Claude Code agent and post findings as inline PR review comments.'
 author: 'vilancer'
 branding:
   icon: 'search'

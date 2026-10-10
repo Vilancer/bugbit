@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.2] - 2026-10-10
+
+### Fixed
+
+- `action.yml` description is under the Marketplace's 125-character limit, so the release can be published to the GitHub Marketplace.
+
 ## [1.3.1] - 2026-10-10
 
 ### Fixed
