@@ -25,6 +25,7 @@ import {
   prefetchPrData,
 } from './github/tools';
 import type { PrefetchedPrData } from './github/types';
+import { prepareBaseRef, readPullRequestRefs } from './runtime/prepareBaseRef';
 import { parseProvider, resolveClaudeAuth } from './runtime/provider';
 import { resolveEvent } from './runtime/resolveEvent';
 import { bootstrapRipgrep } from './runtime/sdkBootstrap';
@@ -247,6 +248,10 @@ async function run(): Promise<void> {
       const reviewTools = createBugbitTools(toolDeps, 'review');
       let reviewRun: { runId: string; streamLogPath?: string };
       if (provider === 'claude') {
+        const refs = readPullRequestRefs(eventPath);
+        if (refs) {
+          prepareBaseRef(cwd, refs);
+        }
         const { prompt, systemPromptAppend } = buildClaudeSkillPrompt(
           reviewModes.join(','),
           promptsDir,

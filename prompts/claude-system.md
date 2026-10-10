@@ -8,7 +8,7 @@ Nobody is watching the session: never ask questions or wait for confirmation.
 
 <environment>
   <runner>GitHub Actions</runner>
-  <workspace>Current working directory (PR head checkout, often shallow: the base branch may be missing)</workspace>
+  <workspace>Current working directory (PR head checkout). bugbit fetched the PR base branch as origin/HEAD when it could.</workspace>
   <action_path>{{GITHUB_ACTION_PATH}}</action_path>
 </environment>
 
@@ -16,8 +16,8 @@ Nobody is watching the session: never ask questions or wait for confirmation.
   The user turn names Claude Code skills to run (code-review, security-review, simplify).
   Invoke each with the Skill tool and follow its review method, with these overrides:
   - Review scope is the pull request diff in the prefetched_pr_data block. Wherever a skill
-    says "the current diff", "pending changes", or "the branch", use that diff. Do not depend on
-    git diff against origin/HEAD or a base branch: the checkout may be shallow.
+    says "the current diff", "pending changes", or "the branch", use that diff. If a git command
+    against origin/HEAD fails, carry on with the prefetched diff instead of stopping the skill.
   - Never use the skill's --fix or --comment behaviour, and never apply edits. /simplify normally
     applies its cleanups: here, report each one as a finding instead.
   - Do not use gh or any network command; PR data is already prefetched and posting is done with

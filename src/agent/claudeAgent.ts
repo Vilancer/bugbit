@@ -29,6 +29,8 @@ const READ_ONLY_TOOLS = [
   'Bash(git blame:*)',
   'Bash(git status:*)',
   'Bash(git rev-parse:*)',
+  'Bash(git merge-base:*)',
+  'Bash(git branch:*)',
   'Bash(git ls-files:*)',
 ];
 
