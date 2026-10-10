@@ -312,15 +312,16 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.BUGBIT_MCP_SERVER = void 0;
 exports.zodShapeFromJsonSchema = zodShapeFromJsonSchema;
+exports.redactSecrets = redactSecrets;
 exports.createBugbitMcpServer = createBugbitMcpServer;
 exports.claudeAgentEnv = claudeAgentEnv;
 exports.runClaudeAgent = runClaudeAgent;
 const core = __importStar(__nccwpck_require__(39910));
 const fs = __importStar(__nccwpck_require__(73024));
-const os = __importStar(__nccwpck_require__(48161));
-const path = __importStar(__nccwpck_require__(76760));
 const claudeSdk_1 = __nccwpck_require__(4698);
 const runWait_1 = __nccwpck_require__(45353);
+const claudeGuard_1 = __nccwpck_require__(15826);
+const streamLog_1 = __nccwpck_require__(23627);
 exports.BUGBIT_MCP_SERVER = 'bugbit';
 /** Read-only tools the review agent may use without prompting (dontAsk denies everything else). */
 const READ_ONLY_TOOLS = [
@@ -339,12 +340,26 @@ const READ_ONLY_TOOLS = [
     'Bash(git status:*)',
     'Bash(git rev-parse:*)',
     'Bash(git merge-base:*)',
-    'Bash(git branch:*)',
     'Bash(git ls-files:*)',
 ];
-const MUTATING_TOOLS = ['Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'WebFetch', 'WebSearch'];
+// `//` = absolute path in permission rules: /proc/self/environ would expose the Claude credential.
+const DENIED_TOOLS = [
+    'Edit',
+    'MultiEdit',
+    'Write',
+    'NotebookEdit',
+    'WebFetch',
+    'WebSearch',
+    'Read(//proc/**)',
+    'Grep(//proc/**)',
+    'Glob(//proc/**)',
+    'Read(**/.git/config)',
+    'Read(**/.env*)',
+];
+/** Token shapes that must never leave through a PR comment, description, or label. */
+const TOKEN_PATTERN = /\b(?:sk-ant-[a-z0-9]+-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|crsr_?[A-Za-z0-9]{30,})/g;
 /** Env vars the agent subprocess must never see (action inputs carry secrets as INPUT_*). */
-const SCRUBBED_ENV = /^(INPUT_|ACTIONS_RUNTIME_TOKEN$|ACTIONS_ID_TOKEN_REQUEST_|GITHUB_TOKEN$|GH_TOKEN$|CURSOR_API_KEY$)/;
+const SCRUBBED_ENV = /^(INPUT_|ACTIONS_RUNTIME_TOKEN$|ACTIONS_ID_TOKEN_REQUEST_|GITHUB_TOKEN$|GH_TOKEN$|CURSOR_API_KEY$|ANTHROPIC_API_KEY$|CLAUDE_CODE_OAUTH_TOKEN$)/;
 function zodFromJsonSchema(z, schema, optional) {
     let result;
     switch (schema.type) {
@@ -378,10 +393,32 @@ function zodShapeFromJsonSchema(z, schema) {
     }
     return shape;
 }
-function createBugbitMcpServer(sdk, customTools) {
+/**
+ * Replaces known secrets and token-shaped strings in tool arguments before they reach GitHub.
+ * Prompt injection in PR content could get the agent to read a credential; whatever it reads
+ * can only leave through bugbit tools, and GitHub masks secrets in logs but not in PR comments.
+ */
+function redactSecrets(value, secrets) {
+    if (typeof value === 'string') {
+        let text = value;
+        for (const secret of secrets) {
+            if (secret)
+                text = text.split(secret).join('[redacted]');
+        }
+        return text.replace(TOKEN_PATTERN, '[redacted]');
+    }
+    if (Array.isArray(value)) {
+        return value.map((item) => redactSecrets(item, secrets));
+    }
+    if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactSecrets(item, secrets)]));
+    }
+    return value;
+}
+function createBugbitMcpServer(sdk, customTools, secrets = []) {
     const tools = Object.entries(customTools).map(([name, custom]) => sdk.tool(name, custom.description ?? name, zodShapeFromJsonSchema(sdk.z, custom.inputSchema), async (args) => {
         try {
-            const result = await custom.execute(args, undefined);
+            const result = await custom.execute(redactSecrets(args, secrets), undefined);
             return { content: [{ type: 'text', text: JSON.stringify(result ?? null) }] };
         }
         catch (error) {
@@ -398,8 +435,6 @@ function claudeAgentEnv(auth, source = process.env) {
     const env = {};
     for (const [key, value] of Object.entries(source)) {
         if (value === undefined || SCRUBBED_ENV.test(key))
-            continue;
-        if (key === 'ANTHROPIC_API_KEY' || key === 'CLAUDE_CODE_OAUTH_TOKEN')
             continue;
         env[key] = value;
     }
@@ -439,7 +474,8 @@ function logMessage(message) {
     }
 }
 async function runClaudeAgent(auth, prompt, cwd, customTools, options = {}) {
-    core.setSecret(auth.kind === 'oauth-token' ? auth.token : auth.key);
+    const secret = auth.kind === 'oauth-token' ? auth.token : auth.key;
+    core.setSecret(secret);
     const sdk = await (0, claudeSdk_1.loadClaudeAgentSdk)();
     const abortController = new AbortController();
     const timeoutMs = options.timeoutMs ?? runWait_1.AGENT_TIMEOUT_MS;
@@ -474,11 +510,15 @@ async function runClaudeAgent(auth, prompt, cwd, customTools, options = {}) {
                 skills: options.skills ?? 'all',
                 permissionMode: 'dontAsk',
                 allowedTools: [...READ_ONLY_TOOLS, ...toolNames],
-                disallowedTools: MUTATING_TOOLS,
-                mcpServers: { [exports.BUGBIT_MCP_SERVER]: createBugbitMcpServer(sdk, customTools) },
-                systemPrompt: options.systemPromptAppend
-                    ? { type: 'preset', preset: 'claude_code', append: options.systemPromptAppend }
-                    : { type: 'preset', preset: 'claude_code' },
+                disallowedTools: DENIED_TOOLS,
+                mcpServers: {
+                    [exports.BUGBIT_MCP_SERVER]: createBugbitMcpServer(sdk, customTools, [
+                        secret,
+                        ...(options.redact ?? []),
+                    ]),
+                },
+                hooks: (0, claudeGuard_1.reviewGuardHooks)(),
+                systemPrompt: { type: 'preset', preset: 'claude_code', append: options.systemPromptAppend },
                 stderr: (data) => core.debug(`[claude] ${data.trimEnd()}`),
             },
         });
@@ -488,7 +528,7 @@ async function runClaudeAgent(auth, prompt, cwd, customTools, options = {}) {
                 runId = String(message.session_id);
                 core.info(`Started Claude session ${runId}`);
                 if (options.saveStreamLog) {
-                    streamLogPath = path.join(process.env.RUNNER_TEMP ?? os.tmpdir(), `bugbit-stream-${runId}.jsonl`);
+                    streamLogPath = (0, streamLog_1.streamLogPathFor)(runId);
                     streamLog = fs.createWriteStream(streamLogPath, { flags: 'a' });
                 }
             }
@@ -520,6 +560,95 @@ async function runClaudeAgent(auth, prompt, cwd, customTools, options = {}) {
             await new Promise((resolve) => streamLog.end(() => resolve()));
         }
     }
+}
+
+
+/***/ }),
+
+/***/ 15826:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+/**
+ * PreToolUse guard for the Claude review session. Permission rules match command prefixes only,
+ * so `Bash(git diff:*)` would also approve `git diff --output=README.md` and `Read` would open
+ * `.git/config` (where actions/checkout@v4 persists the token). This checks arguments and paths.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.splitCommand = splitCommand;
+exports.checkToolUse = checkToolUse;
+exports.reviewGuardHooks = reviewGuardHooks;
+/** git subcommands the review may run; each is read-only once the flags below are refused. */
+const READ_ONLY_GIT = new Set(['diff', 'log', 'show', 'blame', 'status', 'rev-parse', 'ls-files', 'merge-base']);
+/** Flags that write files, read outside the repo, or run external programs. */
+const REFUSED_GIT_FLAG = /^(--output(=|$)|--no-index$|--ext-diff$|--textconv$|--contents(=|$))/;
+const SHELL_META = /[;&|<>`$()\n\\]/;
+/** Paths whose contents are credentials (or can expose them) on a GitHub runner. */
+const SECRET_PATH = /(^|\/)(\.env(\..*)?|\.git-credentials|\.netrc|\.npmrc|id_(rsa|ecdsa|ed25519)[^/]*|[^/]+\.(pem|key|p12|pfx))$|(^|\/)\.git\/config$|^\/proc(\/|$)/;
+/** Splits a command into words, honouring simple single/double quotes (no expansion). */
+function splitCommand(command) {
+    const word = /(?:[^\s"']+|"[^"]*"|'[^']*')+/g;
+    if (command.replace(word, '').trim())
+        return undefined; // a stray, unbalanced quote
+    return (command.match(word) ?? []).map((w) => w.replace(/"([^"]*)"|'([^']*)'/g, '$1$2'));
+}
+function checkBash(command) {
+    if (SHELL_META.test(command)) {
+        return 'Only a single plain git command is allowed (no pipes, redirects, chaining or substitution).';
+    }
+    const argv = splitCommand(command.trim());
+    if (!argv || argv[0] !== 'git' || !READ_ONLY_GIT.has(argv[1] ?? '')) {
+        return `Only read-only git commands are allowed: git ${[...READ_ONLY_GIT].join(' | ')}.`;
+    }
+    const refused = argv.slice(2).find((arg) => REFUSED_GIT_FLAG.test(arg));
+    if (refused) {
+        return `git flag ${refused} is not allowed in review (it writes files or reads outside the repo).`;
+    }
+    return undefined;
+}
+function isSecretPath(value, runnerTemp) {
+    if (typeof value !== 'string' || !value)
+        return false;
+    const normalized = value.replace(/\/+$/, '');
+    return SECRET_PATH.test(normalized) || (!!runnerTemp && normalized.startsWith(runnerTemp));
+}
+/** Returns why a tool call must be refused, or undefined to let normal permissions decide. */
+function checkToolUse(toolName, input, runnerTemp = process.env.RUNNER_TEMP) {
+    if (toolName === 'Bash') {
+        return checkBash(String(input.command ?? ''));
+    }
+    if (toolName === 'Read' || toolName === 'Grep' || toolName === 'Glob') {
+        const target = [input.file_path, input.path, input.pattern, input.glob].find((value) => isSecretPath(value, runnerTemp));
+        if (target !== undefined) {
+            return `Reading ${String(target)} is not allowed: it can contain credentials.`;
+        }
+    }
+    return undefined;
+}
+/** SDK hook config: refuse guarded tool calls before permissions run (also covers subagents). */
+function reviewGuardHooks() {
+    return {
+        PreToolUse: [
+            {
+                matcher: 'Bash|Read|Grep|Glob',
+                hooks: [
+                    async (input) => {
+                        const reason = checkToolUse(String(input.tool_name ?? ''), (input.tool_input ?? {}));
+                        return reason
+                            ? {
+                                hookSpecificOutput: {
+                                    hookEventName: 'PreToolUse',
+                                    permissionDecision: 'deny',
+                                    permissionDecisionReason: reason,
+                                },
+                            }
+                            : {};
+                    },
+                ],
+            },
+        ],
+    };
 }
 
 
@@ -620,8 +749,6 @@ exports.AGENT_TIMEOUT_MS = void 0;
 exports.runAgent = runAgent;
 const sdk_1 = __nccwpck_require__(2400);
 const core = __importStar(__nccwpck_require__(39910));
-const os = __importStar(__nccwpck_require__(48161));
-const path = __importStar(__nccwpck_require__(76760));
 const runWait_1 = __nccwpck_require__(45353);
 const streamLog_1 = __nccwpck_require__(23627);
 var runWait_2 = __nccwpck_require__(45353);
@@ -648,9 +775,7 @@ async function runAgent(apiKey, model, prompt, cwd, customTools, options = {}) {
             const run = await agent.send(prompt);
             activeRun = run;
             core.info(`Started run ${run.id} (agent ${agent.agentId})`);
-            const streamLogPath = options.saveStreamLog
-                ? path.join(process.env.RUNNER_TEMP ?? os.tmpdir(), `bugbit-stream-${run.id}.jsonl`)
-                : undefined;
+            const streamLogPath = options.saveStreamLog ? (0, streamLog_1.streamLogPathFor)(run.id) : undefined;
             logger = new streamLog_1.StreamLogger({
                 saveStreamLog: options.saveStreamLog,
                 streamLogPath,
@@ -824,8 +949,15 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.StreamLogger = void 0;
+exports.streamLogPathFor = streamLogPathFor;
 const fs = __importStar(__nccwpck_require__(73024));
+const os = __importStar(__nccwpck_require__(48161));
+const path = __importStar(__nccwpck_require__(76760));
 const core = __importStar(__nccwpck_require__(39910));
+/** JSONL stream log location for an agent run (uploaded later as an artifact). */
+function streamLogPathFor(runId) {
+    return path.join(process.env.RUNNER_TEMP ?? os.tmpdir(), `bugbit-stream-${runId}.jsonl`);
+}
 const THINKING_PREVIEW_CHARS = 200;
 const ARGS_PREVIEW_CHARS = 120;
 function truncate(text, max) {
@@ -1413,6 +1545,8 @@ async function run() {
                 const result = await (0, claudeAgent_1.runClaudeAgent)(claudeAuth, prompt, cwd, tools, {
                     model,
                     saveStreamLog: saveLog,
+                    // actions/checkout@v4 persists the token in .git/config as a basic-auth header.
+                    redact: [githubToken, Buffer.from(`x-access-token:${githubToken}`).toString('base64')],
                     ...claudeOptions,
                 });
                 core.info(`${label} pass completed: session ${result.runId}`);
@@ -1986,15 +2120,17 @@ function installClaudeAgentSdk(installDir = claudeSdkInstallDir()) {
     return entryPath;
 }
 let sdkPromise;
-function loadClaudeAgentSdk() {
-    if (!sdkPromise) {
-        sdkPromise = Promise.resolve()
-            .then(() => installClaudeAgentSdk())
-            .then((entryPath) => (0, dynamicImport_1.dynamicImport)((0, node_url_1.pathToFileURL)(entryPath).href));
-        sdkPromise.catch(() => {
-            sdkPromise = undefined;
-        });
+async function importClaudeAgentSdk() {
+    try {
+        return await (0, dynamicImport_1.dynamicImport)((0, node_url_1.pathToFileURL)(installClaudeAgentSdk()).href);
     }
+    catch (error) {
+        sdkPromise = undefined; // let a later call retry the install
+        throw error;
+    }
+}
+function loadClaudeAgentSdk() {
+    sdkPromise ??= importClaudeAgentSdk();
     return sdkPromise;
 }
 
@@ -2097,10 +2233,19 @@ function readPullRequestRefs(eventPath) {
 function prepareBaseRef(cwd, refs) {
     const remoteRef = `refs/remotes/origin/${refs.baseRef}`;
     try {
-        git(cwd, ['fetch', '--no-tags', '--quiet', 'origin', `+refs/heads/${refs.baseRef}:${remoteRef}`]);
+        // On a shallow checkout fetch the base shallow too, or it pulls the base branch's full history.
+        const shallow = git(cwd, ['rev-parse', '--is-shallow-repository']) === 'true';
+        git(cwd, [
+            'fetch',
+            '--no-tags',
+            '--quiet',
+            ...(shallow ? [`--depth=${DEEPEN_STEP}`] : []),
+            'origin',
+            `+refs/heads/${refs.baseRef}:${remoteRef}`,
+        ]);
         git(cwd, ['symbolic-ref', 'refs/remotes/origin/HEAD', remoteRef]);
         for (let round = 0; !succeeds(cwd, ['merge-base', 'HEAD', remoteRef]); round++) {
-            if (round >= MAX_DEEPEN_ROUNDS || git(cwd, ['rev-parse', '--is-shallow-repository']) !== 'true') {
+            if (round >= MAX_DEEPEN_ROUNDS || !shallow) {
                 core.warning(`No merge base between HEAD and origin/${refs.baseRef}; skills that diff against origin/HEAD may fail. ` +
                     'Use actions/checkout with fetch-depth: 0 to avoid this.');
                 return false;

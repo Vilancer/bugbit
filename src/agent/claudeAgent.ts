@@ -1,8 +1,6 @@
 import type { SDKCustomTool } from '@cursor/sdk';
 import * as core from '@actions/core';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
 import {
   loadClaudeAgentSdk,
   type ClaudeAgentSdk,
@@ -10,6 +8,8 @@ import {
   type ClaudeZod,
 } from '../runtime/claudeSdk';
 import { AGENT_TIMEOUT_MESSAGE, AGENT_TIMEOUT_MS } from './runWait';
+import { reviewGuardHooks } from './claudeGuard';
+import { streamLogPathFor } from './streamLog';
 
 export const BUGBIT_MCP_SERVER = 'bugbit';
 
@@ -30,14 +30,31 @@ const READ_ONLY_TOOLS = [
   'Bash(git status:*)',
   'Bash(git rev-parse:*)',
   'Bash(git merge-base:*)',
-  'Bash(git branch:*)',
   'Bash(git ls-files:*)',
 ];
 
-const MUTATING_TOOLS = ['Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'WebFetch', 'WebSearch'];
+// `//` = absolute path in permission rules: /proc/self/environ would expose the Claude credential.
+const DENIED_TOOLS = [
+  'Edit',
+  'MultiEdit',
+  'Write',
+  'NotebookEdit',
+  'WebFetch',
+  'WebSearch',
+  'Read(//proc/**)',
+  'Grep(//proc/**)',
+  'Glob(//proc/**)',
+  'Read(**/.git/config)',
+  'Read(**/.env*)',
+];
+
+/** Token shapes that must never leave through a PR comment, description, or label. */
+const TOKEN_PATTERN =
+  /\b(?:sk-ant-[a-z0-9]+-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|crsr_?[A-Za-z0-9]{30,})/g;
 
 /** Env vars the agent subprocess must never see (action inputs carry secrets as INPUT_*). */
-const SCRUBBED_ENV = /^(INPUT_|ACTIONS_RUNTIME_TOKEN$|ACTIONS_ID_TOKEN_REQUEST_|GITHUB_TOKEN$|GH_TOKEN$|CURSOR_API_KEY$)/;
+const SCRUBBED_ENV =
+  /^(INPUT_|ACTIONS_RUNTIME_TOKEN$|ACTIONS_ID_TOKEN_REQUEST_|GITHUB_TOKEN$|GH_TOKEN$|CURSOR_API_KEY$|ANTHROPIC_API_KEY$|CLAUDE_CODE_OAUTH_TOKEN$)/;
 
 export type ClaudeAuth =
   | { kind: 'oauth-token'; token: string }
@@ -47,6 +64,8 @@ export interface RunClaudeAgentOptions {
   model?: string;
   systemPromptAppend?: string;
   saveStreamLog?: boolean;
+  /** Extra values to redact from tool arguments (e.g. the GitHub token and its auth header). */
+  redact?: string[];
   /** Skill names visible to the session; [] hides all skills (describe pass). */
   skills?: string[];
   timeoutMs?: number;
@@ -99,9 +118,34 @@ export function zodShapeFromJsonSchema(z: ClaudeZod, schema: JsonSchema): Record
   return shape;
 }
 
+/**
+ * Replaces known secrets and token-shaped strings in tool arguments before they reach GitHub.
+ * Prompt injection in PR content could get the agent to read a credential; whatever it reads
+ * can only leave through bugbit tools, and GitHub masks secrets in logs but not in PR comments.
+ */
+export function redactSecrets<T>(value: T, secrets: string[]): T {
+  if (typeof value === 'string') {
+    let text: string = value;
+    for (const secret of secrets) {
+      if (secret) text = text.split(secret).join('[redacted]');
+    }
+    return text.replace(TOKEN_PATTERN, '[redacted]') as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => redactSecrets(item, secrets)) as T;
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, redactSecrets(item, secrets)]),
+    ) as T;
+  }
+  return value;
+}
+
 export function createBugbitMcpServer(
   sdk: ClaudeAgentSdk,
   customTools: Record<string, SDKCustomTool>,
+  secrets: string[] = [],
 ): unknown {
   const tools = Object.entries(customTools).map(([name, custom]) =>
     sdk.tool(
@@ -110,7 +154,7 @@ export function createBugbitMcpServer(
       zodShapeFromJsonSchema(sdk.z, custom.inputSchema as JsonSchema),
       async (args): Promise<ClaudeMcpToolResult> => {
         try {
-          const result = await custom.execute(args as never, undefined as never);
+          const result = await custom.execute(redactSecrets(args, secrets) as never, undefined as never);
           return { content: [{ type: 'text', text: JSON.stringify(result ?? null) }] };
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -132,7 +176,6 @@ export function claudeAgentEnv(
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(source)) {
     if (value === undefined || SCRUBBED_ENV.test(key)) continue;
-    if (key === 'ANTHROPIC_API_KEY' || key === 'CLAUDE_CODE_OAUTH_TOKEN') continue;
     env[key] = value;
   }
   if (auth.kind === 'oauth-token') {
@@ -179,7 +222,8 @@ export async function runClaudeAgent(
   customTools: Record<string, SDKCustomTool>,
   options: RunClaudeAgentOptions = {},
 ): Promise<RunClaudeAgentResult> {
-  core.setSecret(auth.kind === 'oauth-token' ? auth.token : auth.key);
+  const secret = auth.kind === 'oauth-token' ? auth.token : auth.key;
+  core.setSecret(secret);
 
   const sdk = await loadClaudeAgentSdk();
   const abortController = new AbortController();
@@ -220,11 +264,15 @@ export async function runClaudeAgent(
         skills: options.skills ?? 'all',
         permissionMode: 'dontAsk',
         allowedTools: [...READ_ONLY_TOOLS, ...toolNames],
-        disallowedTools: MUTATING_TOOLS,
-        mcpServers: { [BUGBIT_MCP_SERVER]: createBugbitMcpServer(sdk, customTools) },
-        systemPrompt: options.systemPromptAppend
-          ? { type: 'preset', preset: 'claude_code', append: options.systemPromptAppend }
-          : { type: 'preset', preset: 'claude_code' },
+        disallowedTools: DENIED_TOOLS,
+        mcpServers: {
+          [BUGBIT_MCP_SERVER]: createBugbitMcpServer(sdk, customTools, [
+            secret,
+            ...(options.redact ?? []),
+          ]),
+        },
+        hooks: reviewGuardHooks(),
+        systemPrompt: { type: 'preset', preset: 'claude_code', append: options.systemPromptAppend },
         stderr: (data: string) => core.debug(`[claude] ${data.trimEnd()}`),
       },
     });
@@ -235,10 +283,7 @@ export async function runClaudeAgent(
         runId = String(message.session_id);
         core.info(`Started Claude session ${runId}`);
         if (options.saveStreamLog) {
-          streamLogPath = path.join(
-            process.env.RUNNER_TEMP ?? os.tmpdir(),
-            `bugbit-stream-${runId}.jsonl`,
-          );
+          streamLogPath = streamLogPathFor(runId);
           streamLog = fs.createWriteStream(streamLogPath, { flags: 'a' });
         }
       }

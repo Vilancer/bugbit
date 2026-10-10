@@ -186,6 +186,8 @@ async function run(): Promise<void> {
         const result = await runClaudeAgent(claudeAuth, prompt, cwd, tools, {
           model,
           saveStreamLog: saveLog,
+          // actions/checkout@v4 persists the token in .git/config as a basic-auth header.
+          redact: [githubToken, Buffer.from(`x-access-token:${githubToken}`).toString('base64')],
           ...claudeOptions,
         });
         core.info(`${label} pass completed: session ${result.runId}`);

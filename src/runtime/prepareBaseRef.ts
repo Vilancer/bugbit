@@ -42,11 +42,20 @@ export function readPullRequestRefs(eventPath: string): PullRequestRefs | undefi
 export function prepareBaseRef(cwd: string, refs: PullRequestRefs): boolean {
   const remoteRef = `refs/remotes/origin/${refs.baseRef}`;
   try {
-    git(cwd, ['fetch', '--no-tags', '--quiet', 'origin', `+refs/heads/${refs.baseRef}:${remoteRef}`]);
+    // On a shallow checkout fetch the base shallow too, or it pulls the base branch's full history.
+    const shallow = git(cwd, ['rev-parse', '--is-shallow-repository']) === 'true';
+    git(cwd, [
+      'fetch',
+      '--no-tags',
+      '--quiet',
+      ...(shallow ? [`--depth=${DEEPEN_STEP}`] : []),
+      'origin',
+      `+refs/heads/${refs.baseRef}:${remoteRef}`,
+    ]);
     git(cwd, ['symbolic-ref', 'refs/remotes/origin/HEAD', remoteRef]);
 
     for (let round = 0; !succeeds(cwd, ['merge-base', 'HEAD', remoteRef]); round++) {
-      if (round >= MAX_DEEPEN_ROUNDS || git(cwd, ['rev-parse', '--is-shallow-repository']) !== 'true') {
+      if (round >= MAX_DEEPEN_ROUNDS || !shallow) {
         core.warning(
           `No merge base between HEAD and origin/${refs.baseRef}; skills that diff against origin/HEAD may fail. ` +
             'Use actions/checkout with fetch-depth: 0 to avoid this.',
