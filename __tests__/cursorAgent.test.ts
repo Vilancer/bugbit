@@ -62,7 +62,6 @@ describe('runAgent', () => {
           cwd: '/tmp/repo',
           autoReview: false,
           settingSources: [],
-          sandboxOptions: { enabled: true },
         }),
       }),
     );

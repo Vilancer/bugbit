@@ -292,8 +292,8 @@ How the session is locked down:
 | | Claude (`provider: claude`) | Cursor (`provider: cursor`) |
 |---|---|---|
 | File edits | Blocked | Asked not to; the Cursor SDK has no per-tool deny rules |
-| Shell | One plain read-only `git` command, arguments checked | Cursor's sandbox (`sandboxOptions.enabled`); commands aren't checked one by one |
-| `.git/config`, `.env*`, keys, `/proc` | Refused | Readable inside the sandbox |
+| Shell | One plain read-only `git` command, arguments checked | Not restricted: the Cursor SDK can't check commands, and its sandbox doesn't start on GitHub-hosted runners |
+| `.git/config`, `.env*`, keys, `/proc` | Refused | Readable |
 | Settings, rules, MCP servers from the PR branch | Never loaded | Never loaded (`settingSources: []`) |
 | Credentials in the agent's environment | Claude credential only | None: bugbit removes its secret inputs and the Actions runtime token from the environment before any agent starts |
 | What gets posted (comments, description, labels) | Scrubbed of credentials | Scrubbed of credentials |

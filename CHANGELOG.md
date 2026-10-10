@@ -13,7 +13,7 @@ All notable changes to this project will be documented in this file.
 ### Changed
 
 - `cursor-api-key` is now only required when `provider` is `cursor`. `model` defaults to `composer-2.5` on cursor and to Claude Code's default model on claude.
-- The Cursor agent no longer loads settings, rules or MCP servers from the PR checkout (`settingSources: []`) and runs with Cursor's sandbox on.
+- The Cursor agent no longer loads settings, rules or MCP servers from the PR checkout (`settingSources: []`).
 
 ### Security
 

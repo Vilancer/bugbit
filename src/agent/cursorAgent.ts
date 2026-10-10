@@ -39,9 +39,9 @@ export async function runAgent(
         cwd,
         customTools,
         autoReview: false,
-        // Never load rules, MCP servers or settings from the PR head checkout.
+        // Never load rules, MCP servers or settings from the PR head checkout. (No sandboxOptions:
+        // the Cursor SDK refuses to start with it on GitHub-hosted runners.)
         settingSources: [],
-        sandboxOptions: { enabled: true },
       },
     });
 
