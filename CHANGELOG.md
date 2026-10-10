@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- `provider` input (`cursor` default, `claude`). `provider: claude` runs Claude Code's built-in `/code-review`, `/security-review`, and `/simplify` skills through the Claude Agent SDK, posting findings through the same `post_review` tool.
+- `claude-code-oauth-token` (from `claude setup-token`) and `anthropic-api-key` inputs for Claude auth.
+- `review-level` input (`low` | `medium` | `high` | `xhigh` | `max`) passed to Claude's `/code-review`.
+
+### Changed
+
+- `cursor-api-key` is now only required when `provider` is `cursor`. `model` defaults to `composer-2.5` on cursor and to Claude Code's default model on claude.
+
 ## [1.2.0] - 2026-09-11
 
 ### Changed
