@@ -11,6 +11,8 @@ export interface BugbitToolDeps {
   autoDescribe?: boolean;
   /** Parsed from describe-labels action input; applied after describe pass. */
   describeLabels?: string[];
+  /** Credentials to strip from every tool argument before it reaches GitHub. */
+  redact?: string[];
 }
 
 export interface PrefetchedPrData {

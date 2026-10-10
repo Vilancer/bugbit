@@ -2,7 +2,9 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
+  buildClaudeSkillPrompt,
   buildSkillPrompt,
+  parseReviewLevel,
   parseReviewModes,
   validateReviewModes,
 } from '../src/prompts/reviewModes';
@@ -103,5 +105,46 @@ describe('buildSkillPrompt', () => {
     expect(prompt).toContain('"number": 1');
     expect(prompt).toContain('You MUST call post_review before finishing');
     expect(prompt).toContain('untrusted author text');
+  });
+});
+
+describe('parseReviewLevel', () => {
+  it('accepts the /code-review levels and empty', () => {
+    expect(parseReviewLevel('')).toBeUndefined();
+    expect(parseReviewLevel('XHigh')).toBe('xhigh');
+  });
+
+  it('rejects unknown levels', () => {
+    expect(() => parseReviewLevel('extreme')).toThrow('Unknown review-level: extreme');
+  });
+});
+
+describe('buildClaudeSkillPrompt', () => {
+  function claudePromptsDir(): string {
+    const promptsDir = makePromptsDir();
+    fs.writeFileSync(path.join(promptsDir, 'claude-system.md'), 'Claude overlay at {{GITHUB_ACTION_PATH}}');
+    return promptsDir;
+  }
+
+  it('lists Claude skills in order and passes the level to code-review only', () => {
+    const result = buildClaudeSkillPrompt(
+      'code-review,security-review,simplify',
+      claudePromptsDir(),
+      '/action',
+      { context: { number: 1 } },
+      'high',
+    );
+
+    expect(result.systemPromptAppend).toBe('Claude overlay at /action');
+    expect(result.prompt).toContain('1. Invoke the `code-review` skill with args "high"');
+    expect(result.prompt).toContain('2. Invoke the `security-review` skill (findings use mode "security-review")');
+    expect(result.prompt).toContain('3. Invoke the `simplify` skill (findings use mode "simplify")');
+    expect(result.prompt).toContain('<prefetched_pr_data>');
+    expect(result.prompt).not.toContain('/review-bugbot');
+  });
+
+  it('omits args when no level is set', () => {
+    const result = buildClaudeSkillPrompt('bugbot', claudePromptsDir(), '/action');
+    expect(result.prompt).toContain('1. Invoke the `code-review` skill (findings use mode "code-review")');
   });
 });

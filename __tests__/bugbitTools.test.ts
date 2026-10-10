@@ -170,6 +170,28 @@ describe('createBugbitTools', () => {
     });
   });
 
+  it('redacts credentials from every tool argument before it reaches GitHub', async () => {
+    const deps = {
+      githubToken: 'test-token',
+      eventPath: '/tmp/event.json',
+      repository: 'owner/repo',
+      actionPath,
+      redact: ['crsr-plain-secret'],
+    };
+    const review = createBugbitTools(deps);
+    await expect(
+      review.post_review.execute(
+        { findings: [{ mode: 'code-review', path: 'a.ts', line: 1, body: 'key crsr-plain-secret, ghs_' + 'x'.repeat(36) }] },
+        {},
+      ),
+    ).resolves.toMatchObject({ posted: [{ body: 'key [redacted], [redacted]' }] });
+
+    const describe = createBugbitTools(deps, 'describe');
+    await expect(
+      describe.update_pr_description.execute({ body: 'token crsr-plain-secret' }, {}),
+    ).resolves.toMatchObject({ body: 'token [redacted]' });
+  });
+
   it('update_pr_description.execute is available on the describe pass', async () => {
     const tools = createBugbitTools(
       {
