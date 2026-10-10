@@ -1,6 +1,7 @@
 import * as core from '@actions/core';
 import * as path from 'path';
 import { runAgent } from './agent/cursorAgent';
+import { runClaudeAgent } from './agent/claudeAgent';
 import {
   artifactUploadErrorMessage,
   streamLogArtifactName,
@@ -9,8 +10,10 @@ import {
 import { resolveActionPath } from './runtime/actionPath';
 import { assertRepoCheckedOut } from './runtime/checkCheckout';
 import {
+  buildClaudeSkillPrompt,
   buildDescribePrompt,
   buildSkillPrompt,
+  parseReviewLevel,
   parseReviewModes,
   validateReviewModes,
 } from './prompts/reviewModes';
@@ -22,6 +25,10 @@ import {
   prefetchPrData,
 } from './github/tools';
 import type { PrefetchedPrData } from './github/types';
+import { prepareBaseRef, readPullRequestRefs } from './runtime/prepareBaseRef';
+import { parseProvider, resolveClaudeAuth } from './runtime/provider';
+import { scrubSecretEnv } from './runtime/secretEnv';
+import { githubTokenForms } from './github/redact';
 import { resolveEvent } from './runtime/resolveEvent';
 import { bootstrapRipgrep } from './runtime/sdkBootstrap';
 
@@ -47,11 +54,27 @@ async function run(): Promise<void> {
     const cwd = process.cwd();
     assertRepoCheckedOut(cwd);
 
-    const apiKey = core.getInput('cursor-api-key', { required: true });
+    const provider = parseProvider(core.getInput('provider'));
+    const apiKey = provider === 'cursor' ? core.getInput('cursor-api-key') : '';
+    if (provider === 'cursor' && !apiKey) {
+      throw new Error('provider: cursor needs the cursor-api-key input.');
+    }
+    const claudeAuth =
+      provider === 'claude'
+        ? resolveClaudeAuth(
+            core.getInput('claude-code-oauth-token'),
+            core.getInput('anthropic-api-key'),
+          )
+        : undefined;
     const githubToken = core.getInput('github-token', { required: true });
     core.setSecret(githubToken);
 
-    const model = core.getInput('model') || 'composer-2.5';
+    // Empty model on claude means Claude Code's default model for the account.
+    const model = core.getInput('model') || (provider === 'cursor' ? 'composer-2.5' : '');
+    const reviewLevel = parseReviewLevel(core.getInput('review-level'));
+    if (reviewLevel && provider === 'cursor') {
+      core.warning('review-level only applies to provider: claude (/code-review levels); ignoring it.');
+    }
     const modesInput = core.getInput('review-modes');
     const saveStreamLog = core.getBooleanInput('save-stream-log');
     const postCleanSummaryInput = core.getInput('post-clean-summary');
@@ -75,6 +98,14 @@ async function run(): Promise<void> {
     }
 
     const prNumber = core.getInput('pr-number');
+    // All inputs are read; agents must not find credentials in the environment.
+    const withActionsRuntime = scrubSecretEnv();
+    const secrets = [
+      ...githubTokenForms(githubToken),
+      apiKey,
+      claudeAuth?.kind === 'oauth-token' ? claudeAuth.token : (claudeAuth?.key ?? ''),
+    ].filter(Boolean);
+    secrets.forEach((secret) => core.setSecret(secret));
     const rawEventPath = process.env.GITHUB_EVENT_PATH ?? '';
     const repository = process.env.GITHUB_REPOSITORY ?? '';
 
@@ -105,6 +136,7 @@ async function run(): Promise<void> {
       cleanSummaryBody,
       autoDescribe,
       describeLabels,
+      redact: secrets,
     };
 
     if (saveStreamLog) {
@@ -158,7 +190,18 @@ async function run(): Promise<void> {
       prompt: string,
       tools: ReturnType<typeof createBugbitTools>,
       saveLog: boolean,
+      claudeOptions: { systemPromptAppend?: string; skills?: string[] } = {},
     ): Promise<{ runId: string; streamLogPath?: string }> {
+      if (claudeAuth) {
+        core.info(`Starting Claude agent (model: ${model || 'default'}, pass: ${label})`);
+        const result = await runClaudeAgent(claudeAuth, prompt, cwd, tools, {
+          model,
+          saveStreamLog: saveLog,
+          ...claudeOptions,
+        });
+        core.info(`${label} pass completed: session ${result.runId}`);
+        return result;
+      }
       core.info(`Starting Cursor agent (model: ${model}, pass: ${label})`);
       const result = await runAgent(apiKey, model, prompt, cwd, tools, {
         saveStreamLog: saveLog,
@@ -181,7 +224,9 @@ async function run(): Promise<void> {
           githubRunId: process.env.GITHUB_RUN_ID,
         });
         core.info(`Uploading stream log artifact "${artifactName}" from ${streamLogPath}…`);
-        const uploadResponse = await uploadStreamLogArtifact(artifactName, streamLogPath);
+        const uploadResponse = await withActionsRuntime(() =>
+          uploadStreamLogArtifact(artifactName, streamLogPath),
+        );
         core.info(
           `Uploaded stream log artifact "${artifactName}" (id: ${uploadResponse.id ?? 'unknown'})`,
         );
@@ -207,23 +252,33 @@ async function run(): Promise<void> {
         describePrompt,
         createBugbitTools(toolDeps, 'describe'),
         saveStreamLog,
+        { skills: [] },
       );
       await uploadStreamLog(describeRun.streamLogPath, describeRun.runId, !runReview);
     }
 
     if (runReview) {
-      const { prompt: reviewPrompt } = buildSkillPrompt(
-        reviewModes.join(','),
-        promptsDir,
-        actionPath,
-        prefetched,
-      );
-      const reviewRun = await runPass(
-        'review',
-        reviewPrompt,
-        createBugbitTools(toolDeps, 'review'),
-        saveStreamLog,
-      );
+      const reviewTools = createBugbitTools(toolDeps, 'review');
+      let reviewRun: { runId: string; streamLogPath?: string };
+      if (provider === 'claude') {
+        const refs = readPullRequestRefs(eventPath);
+        if (refs) {
+          prepareBaseRef(cwd, refs);
+        }
+        const { prompt, systemPromptAppend } = buildClaudeSkillPrompt(
+          reviewModes.join(','),
+          promptsDir,
+          actionPath,
+          prefetched,
+          reviewLevel,
+        );
+        reviewRun = await runPass('review', prompt, reviewTools, saveStreamLog, {
+          systemPromptAppend,
+        });
+      } else {
+        const { prompt } = buildSkillPrompt(reviewModes.join(','), promptsDir, actionPath, prefetched);
+        reviewRun = await runPass('review', prompt, reviewTools, saveStreamLog);
+      }
       await uploadStreamLog(reviewRun.streamLogPath, reviewRun.runId, true);
     }
   } catch (error) {

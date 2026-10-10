@@ -11,6 +11,28 @@ export const SKILL_BY_MODE: Record<ReviewMode, string> = {
   simplify: '/simplify',
 };
 
+/** Claude Code built-in skills invoked by the claude provider (via the Skill tool). */
+export const CLAUDE_SKILL_BY_MODE: Record<ReviewMode, string> = {
+  'code-review': 'code-review',
+  'security-review': 'security-review',
+  simplify: 'simplify',
+};
+
+export const REVIEW_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type ReviewLevel = (typeof REVIEW_LEVELS)[number];
+
+/** Parses the review-level input; empty means "let /code-review use its default". */
+export function parseReviewLevel(input: string): ReviewLevel | undefined {
+  const level = input.trim().toLowerCase();
+  if (!level) {
+    return undefined;
+  }
+  if (!(REVIEW_LEVELS as readonly string[]).includes(level)) {
+    throw new Error(`Unknown review-level: ${input}. Allowed: ${REVIEW_LEVELS.join(', ')}`);
+  }
+  return level as ReviewLevel;
+}
+
 const MODE_ALIASES: Record<string, ReviewMode> = {
   'code-review': 'code-review',
   'review-bugbot': 'code-review',
@@ -108,6 +130,49 @@ export function buildSkillPrompt(
 
   return {
     prompt: `${skillLines}\n\n${systemPrompt}${buildPrefetchedSection(prefetched)}`,
+    modes,
+  };
+}
+
+export interface ClaudeSkillPromptResult {
+  /** User turn: which skills to run plus the prefetched PR data. */
+  prompt: string;
+  /** Appended to the claude_code system prompt: the GitHub Actions overlay. */
+  systemPromptAppend: string;
+  modes: string[];
+}
+
+export function buildClaudeSkillPrompt(
+  modesInput: string,
+  promptsDir: string,
+  actionPath: string,
+  prefetched?: PrefetchedPrData,
+  level?: ReviewLevel,
+): ClaudeSkillPromptResult {
+  const modes = parseReviewModes(modesInput);
+  validateReviewModes(modes);
+
+  const skillLines = modes.map((mode, index) => {
+    const skill = CLAUDE_SKILL_BY_MODE[mode as ReviewMode];
+    const args = mode === 'code-review' && level ? ` with args "${level}"` : '';
+    return `${index + 1}. Invoke the \`${skill}\` skill${args} (findings use mode "${mode}").`;
+  });
+
+  const systemPath = path.join(promptsDir, 'claude-system.md');
+  const systemPromptAppend = fs
+    .readFileSync(systemPath, 'utf-8')
+    .replaceAll('{{GITHUB_ACTION_PATH}}', actionPath);
+
+  const prompt = [
+    'Review this pull request by running these Claude Code skills with the Skill tool, in order:',
+    ...skillLines,
+    '',
+    'Collect every finding across all skills, then call post_review exactly once with all of them (empty findings array if none).',
+  ].join('\n');
+
+  return {
+    prompt: `${prompt}${buildPrefetchedSection(prefetched)}`,
+    systemPromptAppend,
     modes,
   };
 }

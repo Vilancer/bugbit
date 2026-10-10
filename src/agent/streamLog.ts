@@ -1,5 +1,12 @@
 import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import * as core from '@actions/core';
+
+/** JSONL stream log location for an agent run (uploaded later as an artifact). */
+export function streamLogPathFor(runId: string): string {
+  return path.join(process.env.RUNNER_TEMP ?? os.tmpdir(), `bugbit-stream-${runId}.jsonl`);
+}
 
 /** Minimal shape of SDK stream events used for logging. */
 export interface StreamEvent {

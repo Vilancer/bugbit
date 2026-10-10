@@ -61,6 +61,7 @@ describe('runAgent', () => {
           customTools,
           cwd: '/tmp/repo',
           autoReview: false,
+          settingSources: [],
         }),
       }),
     );
